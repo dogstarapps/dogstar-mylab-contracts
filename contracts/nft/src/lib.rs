@@ -12,5 +12,7 @@ mod storage_types;
 mod user_info;
 
 mod test;
+#[cfg(test)]
+mod tests;
 
 pub use crate::contract::NFTClient;
