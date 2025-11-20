@@ -1,7 +1,7 @@
 use crate::actions::deck::read_deck;
 use crate::event::*;
 use crate::storage_types::{
-    DataKey, Deck, DogstarBalance, PendingReward, PlayerReward, PotBalance, PotSnapshot, TokenId,
+    DataKey, Deck, DogstarBalance, PendingReward, PlayerReward, PotBalance, PotSnapshot, GenericTokenAmount,
 };
 use crate::admin::{read_config};
 use crate::storage_types::UserClaimableBalance;
@@ -93,6 +93,44 @@ pub fn write_pot_snapshot(env: &Env, round: u32, snapshot: &PotSnapshot) {
     let key = DataKey::OpeningSnapshot(round);
 
     env.storage().persistent().set(&key, snapshot);
+}
+
+// Multi‑asset helpers
+pub fn read_registered_tokens(env: &Env) -> Vec<Address> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::RegisteredTokens)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn write_registered_tokens(env: &Env, tokens: &Vec<Address>) {
+    env.storage().persistent().set(&DataKey::RegisteredTokens, tokens);
+}
+
+pub fn read_accumulated_by_token(env: &Env, token: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AccumulatedByToken(token.clone()))
+        .unwrap_or(0)
+}
+
+pub fn write_accumulated_by_token(env: &Env, token: &Address, amount: i128) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::AccumulatedByToken(token.clone()), &amount);
+}
+
+pub fn read_user_generic_claimable(env: &Env, user: &Address, token: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::UserGenericClaimable(user.clone(), token.clone()))
+        .unwrap_or(0)
+}
+
+pub fn write_user_generic_claimable(env: &Env, user: &Address, token: &Address, amount: i128) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::UserGenericClaimable(user.clone(), token.clone()), &amount);
 }
 
 pub fn read_pot_snapshot(env: &Env, round: u32) -> Option<PotSnapshot> {
