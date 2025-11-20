@@ -35,6 +35,66 @@ pub struct NFT;
 
 #[contractimpl]
 impl NFT {
+    // --- Multi‑asset pot admin: token registry ---
+    pub fn register_token(e: Env, token: Address) {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        let mut tokens = read_registered_tokens(&e);
+        // Deduplicate
+        let mut exists = false;
+        for t in tokens.iter() { if t == token { exists = true; break; } }
+        if !exists { tokens.push_back(token); }
+        write_registered_tokens(&e, &tokens);
+    }
+
+    pub fn unregister_token(e: Env, token: Address) {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        let mut tokens = read_registered_tokens(&e);
+        let mut filtered = Vec::new(&e);
+        for t in tokens.iter() { if t != token { filtered.push_back(t); } }
+        write_registered_tokens(&e, &filtered);
+    }
+
+    // Accumulate arbitrary SAC token into pot (net of Dogstar fees will be handled off‑chain for now)
+    pub fn accumulate_pot_token(env: Env, token: Address, amount: i128) {
+        let admin = read_administrator(&env);
+        admin.require_auth();
+        assert!(amount >= 0, "Negative contributions not allowed");
+        // Ensure registered
+        let tokens = read_registered_tokens(&env);
+        let mut ok = false; for t in tokens.iter() { if t == token { ok = true; break; } }
+        assert!(ok, "Token not registered");
+
+        // Transfer from admin to contract (assumes admin already holds the SAC token)
+        let client = token::Client::new(&env, &token);
+        client.transfer(&admin, &env.current_contract_address(), &amount);
+
+        // Apply Dogstar fee to all assets
+        let cfg = read_config(&env);
+        let fee_percentage = cfg.dogstar_fee_percentage as i128; // basis points
+        let fee = (amount * fee_percentage) / 10000;
+        let net = amount - fee;
+
+        if token == cfg.xtar_token {
+            // XTAR: accumulate net to pot and store fee in vault
+            let mut pot_balance = read_pot_balance(&env);
+            pot_balance.accumulated_xtar += net;
+            pot_balance.last_updated = env.ledger().timestamp();
+            write_pot_balance(&env, &pot_balance);
+
+            let mut vault = read_contract_vault(&env);
+            vault.dogstar_xtar += fee;
+            write_contract_vault(&env, &vault);
+        } else {
+            // Generic token: accumulate net by token and transfer fee to admin immediately
+            let current = read_accumulated_by_token(&env, &token);
+            write_accumulated_by_token(&env, &token, current + net);
+            if fee > 0 {
+                client.transfer(&env.current_contract_address(), &admin, &fee);
+            }
+        }
+    }
     pub fn initialize(e: Env, admin: Address, config: Config) {
         // Check if the contract is already initialized
         if has_administrator(&e) {
@@ -437,6 +497,41 @@ impl NFT {
         (read_pot_balance(&env), read_dogstar_balance(&env))
     }
 
+    // Consolidated read for UI: totals in the pot (since last opening)
+    // and per-user claimables across core assets and registered generic SACs.
+    pub fn view_pot_overview(env: Env, user: Address) -> PotOverview {
+        let pot = read_pot_balance(&env);
+        let registered = read_registered_tokens(&env);
+
+        // Totals for generic tokens currently accumulated in the pot
+        let mut total_generics: Vec<GenericTokenAmount> = Vec::new(&env);
+        for token in registered.iter() {
+            let amt = read_accumulated_by_token(&env, &token);
+            if amt > 0 { total_generics.push_back(GenericTokenAmount { token: token.clone(), amount: amt }); }
+        }
+
+        // Per-user claimables (core assets)
+        let user_claim = read_user_claimable_balance(&env, &user);
+
+        // Per-user claimables for registered generic tokens
+        let mut user_generics: Vec<GenericTokenAmount> = Vec::new(&env);
+        for token in registered.iter() {
+            let amt = read_user_generic_claimable(&env, &user, &token);
+            if amt > 0 { user_generics.push_back(GenericTokenAmount { token: token.clone(), amount: amt }); }
+        }
+
+        PotOverview {
+            total_terry: pot.accumulated_terry,
+            total_power: pot.accumulated_power,
+            total_xtar: pot.accumulated_xtar,
+            total_generics,
+            user_terry: user_claim.terry,
+            user_power: user_claim.power,
+            user_xtar: user_claim.xtar,
+            user_generics,
+        }
+    }
+
     pub fn get_player_potential_reward(env: Env, player: Address) -> PendingReward {
         let current_round = get_current_round(&env);
         let balance = read_pot_balance(&env);
@@ -616,6 +711,16 @@ impl NFT {
         vault.total_claimable_xtar += balance.accumulated_xtar;
         write_contract_vault(&env, &vault);
         
+        // Snapshot generic SAC tokens
+        let registered = read_registered_tokens(&env);
+        let mut generic_tokens = Vec::new(&env);
+        for token_addr in registered.iter() {
+            let amt = read_accumulated_by_token(&env, &token_addr);
+            if amt > 0 { generic_tokens.push_back(crate::storage_types::GenericTokenAmount { token: token_addr.clone(), amount: amt }); }
+            // reset accumulated for next cycle
+            if amt != 0 { write_accumulated_by_token(&env, &token_addr, 0); }
+        }
+
         let snapshot = PotSnapshot {
             round_number: round,
             total_terry: balance.accumulated_terry,
@@ -624,6 +729,7 @@ impl NFT {
             timestamp: env.ledger().timestamp(),
             total_participants: 0,
             total_effective_power: 0,
+            generic_tokens,
         };
         write_pot_snapshot(&env, round, &snapshot);
         emit_pot_opened(&env, round, &snapshot);
@@ -670,6 +776,15 @@ impl NFT {
                 user_claimable.xtar += xtar_share;
                 user_claimable.last_claim_round = round;
                 write_user_claimable_balance(env, &deck.owner, &user_claimable);
+
+                // Add generic SAC token claimables from snapshot
+                for gta in snapshot.generic_tokens.iter() {
+                    let token_share = (gta.amount * share_percentage as i128) / 10000;
+                    if token_share > 0 {
+                        let current = read_user_generic_claimable(env, &deck.owner, &gta.token);
+                        write_user_generic_claimable(env, &deck.owner, &gta.token, current + token_share);
+                    }
+                }
             }
         }
     }
@@ -680,7 +795,13 @@ impl NFT {
         let mut claimable = read_user_claimable_balance(&env, &player);
         let config = read_config(&env);
 
-        if claimable.terry == 0 && claimable.power == 0 && claimable.xtar == 0 {
+        // Also consider generic SAC claimables before failing
+        let mut has_generic = false;
+        let tokens = read_registered_tokens(&env);
+        for token in tokens.iter() {
+            if read_user_generic_claimable(&env, &player, &token) > 0 { has_generic = true; break; }
+        }
+        if claimable.terry == 0 && claimable.power == 0 && claimable.xtar == 0 && !has_generic {
             return Err(NFTError::NoRewardsAvailable);
         }
         
@@ -720,6 +841,17 @@ impl NFT {
         
         // Emit event
         emit_rewards_claimed(&env, &player, terry_to_claim, power_to_claim, xtar_to_claim);
+
+        // Sweep generic SAC token claimables
+        let tokens = read_registered_tokens(&env);
+        for token in tokens.iter() {
+            let to_claim = read_user_generic_claimable(&env, &player, &token);
+            if to_claim > 0 {
+                let client = token::Client::new(&env, &token);
+                client.transfer(&env.current_contract_address(), &player, &to_claim);
+                write_user_generic_claimable(&env, &player, &token, 0);
+            }
+        }
 
         Ok((terry_to_claim, power_to_claim, xtar_to_claim))
     }

@@ -61,6 +61,7 @@ pub struct PotSnapshot {
     pub timestamp: u64,
     pub total_participants: u32,
     pub total_effective_power: u32,
+    pub generic_tokens: Vec<GenericTokenAmount>,
 }
 
 #[contracttype]
@@ -120,6 +121,28 @@ pub struct UserClaimableBalance {
     pub xtar: i128,
     pub last_claim_round: u32,
     pub last_claim_timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GenericTokenAmount {
+    pub token: Address,
+    pub amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PotOverview {
+    // Current totals accumulated in pot since last opening
+    pub total_terry: i128,
+    pub total_power: u32,
+    pub total_xtar: i128,
+    pub total_generics: Vec<GenericTokenAmount>,
+    // Per-user claimable amounts (not yet claimed)
+    pub user_terry: i128,
+    pub user_power: u32,
+    pub user_xtar: i128,
+    pub user_generics: Vec<GenericTokenAmount>,
 }
 
 #[contracttype]
@@ -243,4 +266,8 @@ pub enum DataKey {
     CurrentRound,
     AllRounds,
     RewardClaim(Address, u64),
+    // Multi‑asset pot extensions
+    RegisteredTokens,
+    AccumulatedByToken(Address),
+    UserGenericClaimable(Address, Address),
 }

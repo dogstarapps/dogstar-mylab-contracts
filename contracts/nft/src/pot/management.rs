@@ -1,11 +1,12 @@
 use crate::actions::deck::read_deck;
 use crate::event::*;
 use crate::storage_types::{
-    DataKey, Deck, DogstarBalance, PendingReward, PlayerReward, PotBalance, PotSnapshot,
+    DataKey, Deck, DogstarBalance, PendingReward, PlayerReward, PotBalance, PotSnapshot, GenericTokenAmount,
 };
 use crate::admin::{read_config};
 use crate::storage_types::UserClaimableBalance;
-use crate::nft_info::Action;
+use crate::nft_info::{Action, Category, read_nft};
+use crate::metadata::read_metadata;
 use crate::user_info::read_user;
 use soroban_sdk::{Address, Env, Vec};
 
@@ -94,6 +95,44 @@ pub fn write_pot_snapshot(env: &Env, round: u32, snapshot: &PotSnapshot) {
     env.storage().persistent().set(&key, snapshot);
 }
 
+// Multi‑asset helpers
+pub fn read_registered_tokens(env: &Env) -> Vec<Address> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::RegisteredTokens)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn write_registered_tokens(env: &Env, tokens: &Vec<Address>) {
+    env.storage().persistent().set(&DataKey::RegisteredTokens, tokens);
+}
+
+pub fn read_accumulated_by_token(env: &Env, token: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AccumulatedByToken(token.clone()))
+        .unwrap_or(0)
+}
+
+pub fn write_accumulated_by_token(env: &Env, token: &Address, amount: i128) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::AccumulatedByToken(token.clone()), &amount);
+}
+
+pub fn read_user_generic_claimable(env: &Env, user: &Address, token: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::UserGenericClaimable(user.clone(), token.clone()))
+        .unwrap_or(0)
+}
+
+pub fn write_user_generic_claimable(env: &Env, user: &Address, token: &Address, amount: i128) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::UserGenericClaimable(user.clone(), token.clone()), &amount);
+}
+
 pub fn read_pot_snapshot(env: &Env, round: u32) -> Option<PotSnapshot> {
     env.storage()
         .persistent()
@@ -171,30 +210,43 @@ pub fn get_eligible_players(env: &Env) -> Vec<Address> {
 }
 
 
-pub fn get_eligible_players_with_shares(env: &Env) -> Vec<(Address, u32, u32, u32)> {
+pub fn get_eligible_players_with_shares(env: &Env) -> Vec<(Address, u32, u32, u32, Vec<(u32, u32, Category)>, u32)> {
     let players = get_eligible_players(env);
     let mut total_effective_power: u32 = 0;
-    let mut player_powers = Vec::new(env);
+    let mut player_data = Vec::new(env);
 
+    // First pass: calculate effective powers and collect all player data with card details
+    // No need for duplicate deck validation - get_eligible_players already filters complete decks
     for player in players.iter() {
         let deck = read_deck(env.clone(), player.clone());
-        if deck.token_ids.len() == 4 {
-            let effective_power = calculate_effective_power(deck.total_power, deck.bonus);
-            total_effective_power += effective_power;
-            player_powers.push_back((player, deck.total_power, effective_power));
+        let user = read_user(env, player.clone());
+        let effective_power = calculate_effective_power(deck.total_power, deck.bonus);
+        total_effective_power += effective_power;
+
+        // Collect card details: (token_id, power, category)
+        let mut card_details = Vec::new(env);
+        for token_id in deck.token_ids.iter() {
+            let card = read_nft(env, player.clone(), token_id.clone());
+            let metadata = read_metadata(env, token_id.0);
+
+            let power = card.map(|c| c.power).unwrap_or(0);
+            let category = metadata.category;
+
+            card_details.push_back((token_id.0, power, category));
         }
+
+        player_data.push_back((player, user.level, deck.total_power, effective_power, card_details, deck.bonus));
     }
 
+    // Second pass: calculate share percentages based on total effective power
     let mut result = Vec::new(env);
-    for (player, total_power, effective_power) in player_powers.iter() {
+    for (player, level, total_power, effective_power, card_details, bonus) in player_data.iter() {
         let share_percentage = if total_effective_power > 0 {
             (effective_power * 10000) / total_effective_power // Basis points
         } else {
             0
         };
-        let user = read_user(env, player.clone());
-
-        result.push_back((player, user.level, total_power, share_percentage));
+        result.push_back((player, level, total_power, share_percentage, card_details, bonus));
     }
     result
 }
