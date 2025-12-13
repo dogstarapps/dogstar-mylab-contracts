@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(stellar network:*)",
-      "Bash(stellar keys:*)"
+      "Bash(stellar keys:*)",
+      "Bash(stellar contract build:*)",
+      "Bash(stellar contract deploy:*)",
+      "Bash(export GIT_SSL_CAINFO=\"/mingw64/ssl/certs/ca-bundle.crt\")"
     ],
     "deny": [],
     "ask": []
