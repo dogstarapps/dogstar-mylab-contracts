@@ -24,8 +24,6 @@ const MIN_XLM_RESERVE: i128 = 500_0000; // 0.5 XLM in stroops
 //     native_token.balance(player) >= MIN_XLM_RESERVE
 // }
 
-
-
 pub fn process_reward(e: &Env, player: &Address, reward: &PendingReward) -> RewardStatus {
     let mut user = read_user(e, player.clone());
     let _config = read_config(e);
@@ -77,20 +75,21 @@ pub fn claim_all_pending_rewards(e: Env, player: Address) {
                     terry_amount: (snapshot.total_terry * share) / 10000,
                     power_amount: ((snapshot.total_power as i128 * share) / 10000) as u32,
                     xtar_amount: (snapshot.total_xtar * share) / 10000,
+                    generic_tokens: Vec::new(&e), // Initialize empty for legacy fallback
                     status: RewardStatus::Pending,
                 };
 
                 // First, atomically mark the reward as being processed to prevent race conditions
                 let key = DataKey::PlayerShare(round, player.clone());
-                
+
                 // Check if reward still exists (prevents double-claim)
                 if !e.storage().persistent().has(&key) {
                     continue; // Already claimed, skip
                 }
-                
+
                 // Remove reward BEFORE processing to prevent double-spending
                 e.storage().persistent().remove(&key);
-                
+
                 let status = process_reward(&e, &player, &reward);
                 if status == RewardStatus::Claimed {
                     emit_reward_claimed(&e, &player, &reward);

@@ -1,7 +1,7 @@
 use crate::{nft_info::remove_nft, user_info::mint_terry, *};
 use admin::{read_balance, read_config, write_balance};
 use nft_info::{read_nft, write_nft, Action, Category};
-use soroban_sdk::{contracttype, symbol_short, vec, Address, Env, IntoVal, Symbol, Val, Vec, log};
+use soroban_sdk::{contracttype, log, symbol_short, vec, Address, Env, IntoVal, Symbol, Val, Vec};
 use storage_types::{DataKey, TokenId, BALANCE_BUMP_AMOUNT, BALANCE_LIFETIME_THRESHOLD};
 use user_info::read_user;
 
@@ -95,7 +95,7 @@ pub fn read_fight(env: Env, user: Address, category: Category, token_id: TokenId
 
 pub fn remove_fight(env: Env, user: Address, category: Category, token_id: TokenId) {
     let owner = read_user(&env, user).owner;
-    
+
     let key = DataKey::Fights;
     let mut fights = read_fights(env.clone());
     if let Some(pos) = fights.iter().position(|fight| {
@@ -275,15 +275,15 @@ pub fn open_position(
 
     // Enhanced oracle price validation
     assert!(trigger_price > 0, "Invalid oracle price: must be positive");
-    assert!(trigger_price < i128::MAX / 100, "Oracle price exceeds maximum");
-    
+    assert!(
+        trigger_price < i128::MAX / 100,
+        "Oracle price exceeds maximum"
+    );
+
     // TODO: Add staleness check when timestamp is available from oracle
     // assert!(price_timestamp > env.ledger().timestamp() - 3600, "Oracle price too stale");
 
-    let amount_asset = position_size
-        .checked_mul(1000000)
-        .expect("Overflow")
-        / trigger_price;
+    let amount_asset = position_size.checked_mul(1000000).expect("Overflow") / trigger_price;
 
     // Store fight
     nft.locked_by_action = Action::Fight;
@@ -309,20 +309,20 @@ pub fn open_position(
     // Mint TERRY rewards
     let terry_reward = config.terry_per_fight;
     let terry_to_haw_ai = terry_reward * config.haw_ai_percentage as i128 / 100;
-    
+
     mint_terry(&env, owner.clone(), terry_reward);
     balance.haw_ai_terry += terry_to_haw_ai;
-    
+
     // Send power fee and terry to haw_ai_pot
     crate::pot::management::accumulate_pot_internal(
-        &env, 
-        terry_to_haw_ai, 
-        power_fee, 
-        0, 
-        Some(owner), 
-        Some(Action::Fight)
+        &env,
+        terry_to_haw_ai,
+        power_fee,
+        0,
+        Some(owner),
+        Some(Action::Fight),
     );
-    
+
     write_balance(&env, &balance);
 }
 
@@ -364,7 +364,11 @@ pub fn close_position(env: Env, user: Address, category: Category, token_id: Tok
     assert!(current_price > 0, "Invalid oracle price");
     assert!(fight.trigger_price > 0, "Invalid trigger price");
     let pnl_usdc = position_size * (current_price - fight.trigger_price) / fight.trigger_price;
-    let pnl_usdc = if fight.side_position == SidePosition::Long { pnl_usdc } else { -1 * pnl_usdc };
+    let pnl_usdc = if fight.side_position == SidePosition::Long {
+        pnl_usdc
+    } else {
+        -1 * pnl_usdc
+    };
     let pnl_power = pnl_usdc * 10000 / power_to_usdc_rate;
     log!(&env, "pnl = ", pnl_usdc, pnl_power);
 
@@ -372,7 +376,15 @@ pub fn close_position(env: Env, user: Address, category: Category, token_id: Tok
 
     // Calculate trading result: staked fight power + P&L
     let trading_result = fight.power as i128 + pnl_power;
-    log!(&env, "trading calculation: fight.power =", fight.power, "pnl_power =", pnl_power, "trading_result =", trading_result);
+    log!(
+        &env,
+        "trading calculation: fight.power =",
+        fight.power,
+        "pnl_power =",
+        pnl_power,
+        "trading_result =",
+        trading_result
+    );
 
     let final_power = if trading_result < 0 {
         // Loss: user loses all staked power
@@ -380,14 +392,22 @@ pub fn close_position(env: Env, user: Address, category: Category, token_id: Tok
     } else {
         // Profit: split between haw_ai and user
         let profit = pnl_power; // Only the profit part, not including the original stake
-        
+
         if profit > 0 {
             // Split profit: haw_ai gets percentage, user gets the rest
             let profit_to_haw_ai = (profit * config.haw_ai_percentage as i128) / 100;
             let profit_to_user = profit - profit_to_haw_ai;
-            
-            log!(&env, "profit split: total_profit =", profit, "haw_ai =", profit_to_haw_ai, "user =", profit_to_user);
-            
+
+            log!(
+                &env,
+                "profit split: total_profit =",
+                profit,
+                "haw_ai =",
+                profit_to_haw_ai,
+                "user =",
+                profit_to_user
+            );
+
             // Send haw_ai's share to pot
             if profit_to_haw_ai > 0 {
                 balance.haw_ai_power += profit_to_haw_ai as u32;
@@ -397,10 +417,10 @@ pub fn close_position(env: Env, user: Address, category: Category, token_id: Tok
                     profit_to_haw_ai as u32,
                     0,
                     Some(owner.clone()),
-                    Some(Action::Fight)
+                    Some(Action::Fight),
                 );
             }
-            
+
             // Return user's profit + original stake
             nft.power + fight.power + profit_to_user as u32
         } else {
@@ -409,7 +429,13 @@ pub fn close_position(env: Env, user: Address, category: Category, token_id: Tok
         }
     };
 
-    log!(&env, "power calculation: nft.power =", nft.power, "final_power =", final_power);
+    log!(
+        &env,
+        "power calculation: nft.power =",
+        nft.power,
+        "final_power =",
+        final_power
+    );
 
     if final_power == 0 {
         remove_owner_card(&env, user.clone(), token_id.clone());
@@ -426,10 +452,10 @@ pub fn close_position(env: Env, user: Address, category: Category, token_id: Tok
     // Mint TERRY rewards
     let terry_reward = config.terry_per_fight;
     let terry_to_haw_ai = terry_reward * config.haw_ai_percentage as i128 / 100;
-    
+
     mint_terry(&env, owner.clone(), terry_reward);
     balance.haw_ai_terry += terry_to_haw_ai;
-    
+
     // Send terry to haw_ai_pot
     crate::pot::management::accumulate_pot_internal(
         &env,
@@ -437,8 +463,8 @@ pub fn close_position(env: Env, user: Address, category: Category, token_id: Tok
         0,
         0,
         Some(owner),
-        Some(Action::Fight)
+        Some(Action::Fight),
     );
-    
+
     write_balance(&env, &balance);
 }

@@ -1,3 +1,4 @@
+use crate::event::emit_burn;
 use crate::{user_info::mint_terry, *};
 use admin::read_config;
 use metadata::read_metadata;
@@ -5,7 +6,6 @@ use nft_info::{read_nft, remove_nft, Action};
 use soroban_sdk::{Address, Env};
 use storage_types::TokenId;
 use user_info::{read_owner_card, read_user, write_owner_card, write_user};
-use crate::event::emit_burn;
 
 pub fn burn(env: Env, user: Address, token_id: TokenId) {
     user.require_auth();
@@ -17,11 +17,12 @@ pub fn burn(env: Env, user: Address, token_id: TokenId) {
     let card_metadata = read_metadata(&env, token_id.0);
 
     // Calculate Terry and Power amounts
-    let terry_amount = card_metadata.price_terry * (nft.power as i128 / card_metadata.initial_power as i128) /2;
+    let terry_amount =
+        card_metadata.price_terry * (nft.power as i128 / card_metadata.initial_power as i128) / 2;
     let receive_amount = terry_amount * config.burn_receive_percentage as i128 / 100;
     let pot_terry = terry_amount - receive_amount; // Terry to pot
     let total_power = card_metadata.initial_power + nft.power / 2;
-    let receive_power = total_power as i128 * config.burn_receive_percentage as i128 /100;
+    let receive_power = total_power as i128 * config.burn_receive_percentage as i128 / 100;
     let pot_power = total_power as i128 - receive_power;
 
     // Mint owner's share
@@ -29,7 +30,14 @@ pub fn burn(env: Env, user: Address, token_id: TokenId) {
     write_user(&env.clone(), owner.clone(), user);
     mint_terry(&env, owner.clone(), receive_amount);
     // Accumulate to pot with Dogstar fee deduction (internal helper, no admin auth)
-    crate::pot::management::accumulate_pot_internal(&env, pot_terry, pot_power as u32, 0, Some(owner.clone()), Some(Action::Burn));
+    crate::pot::management::accumulate_pot_internal(
+        &env,
+        pot_terry,
+        pot_power as u32,
+        0,
+        Some(owner.clone()),
+        Some(Action::Burn),
+    );
 
     // Emit burn event
     emit_burn(&env, &owner);
