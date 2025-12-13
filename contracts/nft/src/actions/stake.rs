@@ -1,10 +1,10 @@
+use crate::event::{emit_stake, emit_stake_increased, emit_unstake};
 use crate::{user_info::mint_terry, *};
 use admin::{read_balance, read_config, read_state, write_balance, write_state};
 use nft_info::{read_nft, write_nft, Action, Category};
 use soroban_sdk::{contracttype, vec, Address, Env, Vec};
 use storage_types::{DataKey, TokenId, BALANCE_BUMP_AMOUNT, BALANCE_LIFETIME_THRESHOLD};
 use user_info::read_user;
-use crate::event::{emit_stake, emit_stake_increased, emit_unstake};
 
 #[contracttype]
 #[derive(Clone, PartialEq)]
@@ -111,8 +111,14 @@ pub fn stake(env: Env, user: Address, category: Category, token_id: TokenId, per
 
     let config = read_config(&env);
     // Validate period index bounds to avoid panic
-    assert!(period_index < config.stake_periods.len(), "Invalid period index");
-    assert!(period_index < config.stake_interest_percentages.len(), "Invalid period index");
+    assert!(
+        period_index < config.stake_periods.len(),
+        "Invalid period index"
+    );
+    assert!(
+        period_index < config.stake_interest_percentages.len(),
+        "Invalid period index"
+    );
     let power_fee = config.power_action_fee * nft.power / 100;
 
     nft.locked_by_action = Action::Stake;
@@ -169,7 +175,7 @@ pub fn increase_stake_power(
 ) {
     user.require_auth();
     let owner = read_user(&env, user).owner;
-    
+
     // Input validation
     assert!(increase_power > 0, "Increase power must be positive");
     assert!(increase_power <= u32::MAX / 2, "Increase power too large");
@@ -179,22 +185,30 @@ pub fn increase_stake_power(
     assert!(nft.power >= increase_power, "Insufficient NFT power");
 
     let mut stake = read_stake(&env, owner.clone(), category.clone(), token_id.clone());
-    
+
     // Safe addition to prevent overflow
-    stake.power = stake.power.checked_add(increase_power)
+    stake.power = stake
+        .power
+        .checked_add(increase_power)
         .expect("Stake power overflow");
 
     let config = read_config(&env);
-    let power_fee = config.power_action_fee.checked_mul(increase_power)
+    let power_fee = config
+        .power_action_fee
+        .checked_mul(increase_power)
         .and_then(|v| v.checked_div(100))
         .expect("Fee calculation overflow");
-    
+
     // Safe subtraction to prevent underflow
-    stake.power = stake.power.checked_sub(power_fee)
+    stake.power = stake
+        .power
+        .checked_sub(power_fee)
         .expect("Insufficient stake power for fee");
 
     // Safe subtraction to prevent underflow
-    nft.power = nft.power.checked_sub(increase_power)
+    nft.power = nft
+        .power
+        .checked_sub(increase_power)
         .expect("Insufficient NFT power");
     write_nft(&env, owner.clone(), token_id.clone(), nft);
 

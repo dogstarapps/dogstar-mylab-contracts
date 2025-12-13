@@ -71,6 +71,7 @@ pub struct PendingReward {
     pub terry_amount: i128,
     pub power_amount: u32,
     pub xtar_amount: i128,
+    pub generic_tokens: Vec<GenericTokenAmount>,
     pub status: RewardStatus,
 }
 
@@ -205,16 +206,16 @@ pub struct State {
     pub last_update_ts: u64,
     pub active_loans: u64,
     // Lazy pro‑rata liquidation index and total weight (sum of reserve_remaining)
-    pub l_index: u64,   // fixed-point SCALE=1e6
+    pub l_index: u64, // fixed-point SCALE=1e6
     pub w_total: u64,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BorrowMeta {
-    pub last_l_index: u64,     // last applied liquidation index (SCALE)
-    pub weight: u32,           // equals reserve_remaining at last update
-    pub reserve_remaining: u32 // remaining reserve earmarked for interest/haircuts
+    pub last_l_index: u64,      // last applied liquidation index (SCALE)
+    pub weight: u32,            // equals reserve_remaining at last update
+    pub reserve_remaining: u32, // remaining reserve earmarked for interest/haircuts
 }
 
 #[derive(Clone, Debug)]

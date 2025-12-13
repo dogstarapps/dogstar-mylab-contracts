@@ -81,9 +81,11 @@ pub fn read_nft(env: &Env, owner: Address, token_id: TokenId) -> Option<Card> {
     );
     let key = DataKey::Card(owner, token_id);
     if let Some(card) = env.storage().persistent().get::<_, Card>(&key) {
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        env.storage().persistent().extend_ttl(
+            &key,
+            BALANCE_LIFETIME_THRESHOLD,
+            BALANCE_BUMP_AMOUNT,
+        );
         Some(card)
     } else {
         None

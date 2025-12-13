@@ -7,19 +7,19 @@ use crate::{
     actions::fight,
     contract::NFT,
     metadata::CardMetadata,
-    nft_info::{Category, Currency},
+    nft_info::{Action, Category, Currency},
     storage_types::TokenId,
 };
 use soroban_sdk::testutils::Events;
 use soroban_sdk::token::StellarAssetClient;
 
-use soroban_sdk::{log, testutils::Address as _, vec, Address, Env};
-use soroban_sdk::testutils::Ledger as _;
-use soroban_sdk::symbol_short;
-use soroban_sdk::{Symbol, TryFromVal};
-use soroban_sdk::{token::TokenClient, String};
 use crate::actions::lending::{calculate_apy, touch_loans};
 use crate::pot::management::accumulate_pot_internal;
+use soroban_sdk::symbol_short;
+use soroban_sdk::testutils::Ledger as _;
+use soroban_sdk::{log, testutils::Address as _, vec, Address, Env};
+use soroban_sdk::{token::TokenClient, String};
+use soroban_sdk::{Symbol, TryFromVal};
 
 // Local copies of constants to avoid relying on private items
 const SCALE: u64 = 1_000_000;
@@ -35,7 +35,12 @@ fn create_test_env() -> (Env, Address) {
     (env, contract_id)
 }
 
-fn create_nft<'a>(e: Env, contract_id: &Address, admin: &Address, config: &Config) -> NFTClient<'a> {
+fn create_nft<'a>(
+    e: Env,
+    contract_id: &Address,
+    admin: &Address,
+    config: &Config,
+) -> NFTClient<'a> {
     let nft: NFTClient = NFTClient::new(&e, contract_id);
     nft.initialize(admin, config);
     nft
@@ -648,6 +653,38 @@ fn test_accumulate_pot() {
 }
 
 #[test]
+fn test_accumulate_pot_transfers_xtar() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+
+    let mut config = generate_config(&e);
+    let xtar_token = e.register_stellar_asset_contract(admin.clone());
+    config.xtar_token = xtar_token.clone();
+
+    let xtar_client = TokenClient::new(&e, &xtar_token);
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+
+    // Fund admin and player with XTAR so they can contribute
+    mint_token(&e, xtar_token.clone(), admin.clone(), 100_000);
+    mint_token(&e, xtar_token.clone(), player.clone(), 50_000);
+
+    let contract_address = contract_id.clone();
+
+    // Default funding source (admin)
+    let admin_balance_before = xtar_client.balance(&admin);
+    nft.accumulate_pot(&0, &0, &10_000, &None, &None);
+    assert_eq!(xtar_client.balance(&admin), admin_balance_before - 10_000);
+    assert_eq!(xtar_client.balance(&contract_address), 10_000);
+
+    // Explicit funding source (player)
+    let player_balance_before = xtar_client.balance(&player);
+    nft.accumulate_pot(&0, &0, &5_000, &Some(player.clone()), &Some(Action::Mint));
+    assert_eq!(xtar_client.balance(&player), player_balance_before - 5_000);
+    assert_eq!(xtar_client.balance(&contract_address), 15_000);
+}
+
+#[test]
 fn test_open_pot() {
     let (e, contract_id) = create_test_env();
     let admin = Address::generate(&e);
@@ -962,7 +999,10 @@ fn lb_e2e_lend_borrow_repay_withdraw_basic() {
     let lender_card = nft.card(&lender, &TokenId(101)).unwrap();
     let borrower_card = nft.card(&borrower, &TokenId(201)).unwrap();
     assert_eq!(lender_card.locked_by_action, crate::nft_info::Action::None);
-    assert_eq!(borrower_card.locked_by_action, crate::nft_info::Action::None);
+    assert_eq!(
+        borrower_card.locked_by_action,
+        crate::nft_info::Action::None
+    );
 }
 
 #[test]
@@ -1043,8 +1083,16 @@ fn lb_borrow_quote_insufficient_pool() {
     nft.mint_terry(&lender, &100000);
     nft.mint_terry(&borrower, &100000);
 
-    let mut md_l = create_metadata(&e); md_l.token_id = 901; md_l.category = Category::Resource; md_l.initial_power = 1000; md_l.max_power = 20000;
-    let mut md_b = create_metadata(&e); md_b.token_id = 902; md_b.category = Category::Resource; md_b.initial_power = 5000; md_b.max_power = 20000;
+    let mut md_l = create_metadata(&e);
+    md_l.token_id = 901;
+    md_l.category = Category::Resource;
+    md_l.initial_power = 1000;
+    md_l.max_power = 20000;
+    let mut md_b = create_metadata(&e);
+    md_b.token_id = 902;
+    md_b.category = Category::Resource;
+    md_b.initial_power = 5000;
+    md_b.max_power = 20000;
     nft.create_metadata(&md_l, &901);
     nft.create_metadata(&md_b, &902);
     nft.mint(&lender, &TokenId(901), &1, &Currency::Terry);
@@ -1072,8 +1120,16 @@ fn lb_borrow_quote_exceeds_collateral() {
     nft.mint_terry(&lender, &100000);
     nft.mint_terry(&borrower, &100000);
 
-    let mut md_l = create_metadata(&e); md_l.token_id = 903; md_l.category = Category::Resource; md_l.initial_power = 5000; md_l.max_power = 20000;
-    let mut md_b = create_metadata(&e); md_b.token_id = 904; md_b.category = Category::Resource; md_b.initial_power = 300; md_b.max_power = 20000;
+    let mut md_l = create_metadata(&e);
+    md_l.token_id = 903;
+    md_l.category = Category::Resource;
+    md_l.initial_power = 5000;
+    md_l.max_power = 20000;
+    let mut md_b = create_metadata(&e);
+    md_b.token_id = 904;
+    md_b.category = Category::Resource;
+    md_b.initial_power = 300;
+    md_b.max_power = 20000;
     nft.create_metadata(&md_l, &903);
     nft.create_metadata(&md_b, &904);
     nft.mint(&lender, &TokenId(903), &1, &Currency::Terry);
@@ -1103,8 +1159,16 @@ fn lb_touch_loans_partial_haircut() {
     nft.mint_terry(&borrower, &100000);
 
     // Metadata and mint
-    let mut md_l = create_metadata(&e); md_l.token_id = 501; md_l.category = Category::Resource; md_l.initial_power = 5000; md_l.max_power = 20000;
-    let mut md_b = create_metadata(&e); md_b.token_id = 502; md_b.category = Category::Resource; md_b.initial_power = 5000; md_b.max_power = 20000;
+    let mut md_l = create_metadata(&e);
+    md_l.token_id = 501;
+    md_l.category = Category::Resource;
+    md_l.initial_power = 5000;
+    md_l.max_power = 20000;
+    let mut md_b = create_metadata(&e);
+    md_b.token_id = 502;
+    md_b.category = Category::Resource;
+    md_b.initial_power = 5000;
+    md_b.max_power = 20000;
     nft.create_metadata(&md_l, &501);
     nft.create_metadata(&md_b, &502);
     nft.mint(&lender, &TokenId(501), &1, &Currency::Terry);
@@ -1140,18 +1204,24 @@ fn lb_touch_loans_partial_haircut() {
     e.as_contract(&contract_id, || {
         touch_loans(
             e.clone(),
-            vec![&e, (borrower.clone(), Category::Resource, TokenId(502))]
+            vec![&e, (borrower.clone(), Category::Resource, TokenId(502))],
         );
         // Check LoanTouched event exists (optional)
         let evs = e.events().all();
         let touched = evs.iter().any(|(_, topics, _)| {
-            if topics.len() == 0 { return false; }
+            if topics.len() == 0 {
+                return false;
+            }
             let v = topics.get(0).unwrap();
             if let Ok(sym) = Symbol::try_from_val(&e, &v) {
                 sym == symbol_short!("loan_tch")
-            } else { false }
+            } else {
+                false
+            }
         });
-        if touched { touched_flag = true; }
+        if touched {
+            touched_flag = true;
+        }
     });
 
     // BorrowMeta should have reduced reserve_remaining and weight, w_total decreased
@@ -1164,13 +1234,16 @@ fn lb_touch_loans_partial_haircut() {
             crate::admin::write_state(&e, &st);
             touch_loans(
                 e.clone(),
-                vec![&e, (borrower.clone(), Category::Resource, TokenId(502))]
+                vec![&e, (borrower.clone(), Category::Resource, TokenId(502))],
             );
         });
         after = nft.admin_state();
     }
     assert!(after.w_total <= before_w_total);
-    assert!(after.w_total < before_w_total || touched_flag, "expected w_total decrease or LoanTouched event");
+    assert!(
+        after.w_total < before_w_total || touched_flag,
+        "expected w_total decrease or LoanTouched event"
+    );
 }
 
 #[test]
@@ -1188,8 +1261,16 @@ fn lb_touch_loans_total_haircut_and_ownership_loss() {
     nft.mint_terry(&borrower, &100000);
 
     // Metadata and mint with low collateral to trigger ownership loss after reserve depletion
-    let mut md_l = create_metadata(&e); md_l.token_id = 601; md_l.category = Category::Resource; md_l.initial_power = 2000; md_l.max_power = 20000;
-    let mut md_b = create_metadata(&e); md_b.token_id = 602; md_b.category = Category::Resource; md_b.initial_power = 300; md_b.max_power = 20000;
+    let mut md_l = create_metadata(&e);
+    md_l.token_id = 601;
+    md_l.category = Category::Resource;
+    md_l.initial_power = 2000;
+    md_l.max_power = 20000;
+    let mut md_b = create_metadata(&e);
+    md_b.token_id = 602;
+    md_b.category = Category::Resource;
+    md_b.initial_power = 300;
+    md_b.max_power = 20000;
     nft.create_metadata(&md_l, &601);
     nft.create_metadata(&md_b, &602);
     nft.mint(&lender, &TokenId(601), &1, &Currency::Terry);
@@ -1221,24 +1302,32 @@ fn lb_touch_loans_total_haircut_and_ownership_loss() {
     e.as_contract(&contract_id, || {
         touch_loans(
             e.clone(),
-            vec![&e, (borrower.clone(), Category::Resource, TokenId(602))]
+            vec![&e, (borrower.clone(), Category::Resource, TokenId(602))],
         );
         // Assert LoanTouched and possibly LoanLiquidated events
         let evs = e.events().all();
         let touched = evs.iter().any(|(_, topics, _)| {
-            if topics.len() == 0 { return false; }
+            if topics.len() == 0 {
+                return false;
+            }
             let v = topics.get(0).unwrap();
             if let Ok(sym) = Symbol::try_from_val(&e, &v) {
                 sym == symbol_short!("loan_tch")
-            } else { false }
+            } else {
+                false
+            }
         });
         assert!(touched);
         let liquidated = evs.iter().any(|(_, topics, _)| {
-            if topics.len() == 0 { return false; }
+            if topics.len() == 0 {
+                return false;
+            }
             let v = topics.get(0).unwrap();
             if let Ok(sym) = Symbol::try_from_val(&e, &v) {
                 sym == symbol_short!("loan_liq")
-            } else { false }
+            } else {
+                false
+            }
         });
         assert!(liquidated || true); // allow no liquidation if collateral remained
     });
@@ -1275,10 +1364,26 @@ fn lb_withdraw_emits_index_updated() {
     nft.mint_terry(&lender2, &100000);
     nft.mint_terry(&borrower2, &100000);
 
-    let mut md_l = create_metadata(&e); md_l.token_id = 801; md_l.category = Category::Resource; md_l.initial_power = 5000; md_l.max_power = 20000;
-    let mut md_b = create_metadata(&e); md_b.token_id = 802; md_b.category = Category::Resource; md_b.initial_power = 5000; md_b.max_power = 20000;
-    let mut md_b2 = create_metadata(&e); md_b2.token_id = 803; md_b2.category = Category::Resource; md_b2.initial_power = 5000; md_b2.max_power = 20000;
-    let mut md_l2 = create_metadata(&e); md_l2.token_id = 804; md_l2.category = Category::Resource; md_l2.initial_power = 5000; md_l2.max_power = 20000;
+    let mut md_l = create_metadata(&e);
+    md_l.token_id = 801;
+    md_l.category = Category::Resource;
+    md_l.initial_power = 5000;
+    md_l.max_power = 20000;
+    let mut md_b = create_metadata(&e);
+    md_b.token_id = 802;
+    md_b.category = Category::Resource;
+    md_b.initial_power = 5000;
+    md_b.max_power = 20000;
+    let mut md_b2 = create_metadata(&e);
+    md_b2.token_id = 803;
+    md_b2.category = Category::Resource;
+    md_b2.initial_power = 5000;
+    md_b2.max_power = 20000;
+    let mut md_l2 = create_metadata(&e);
+    md_l2.token_id = 804;
+    md_l2.category = Category::Resource;
+    md_l2.initial_power = 5000;
+    md_l2.max_power = 20000;
     nft.create_metadata(&md_l, &801);
     nft.create_metadata(&md_b, &802);
     nft.create_metadata(&md_b2, &803);
@@ -1308,16 +1413,32 @@ fn lb_withdraw_emits_index_updated() {
     e.as_contract(&contract_id, || {
         // Backdate Lending.lent_at by 2 hours
         let mut lending = crate::actions::lending::read_lending(
-            e.clone(), lender.clone(), Category::Resource, TokenId(801));
+            e.clone(),
+            lender.clone(),
+            Category::Resource,
+            TokenId(801),
+        );
         lending.lent_at = lending.lent_at.saturating_sub(7_200);
-        let key = crate::storage_types::DataKey::Lending(lender.clone(), Category::Resource, TokenId(801));
+        let key = crate::storage_types::DataKey::Lending(
+            lender.clone(),
+            Category::Resource,
+            TokenId(801),
+        );
         e.storage().persistent().set(&key, &lending);
 
         // Backdate second lender as well
         let mut lending2 = crate::actions::lending::read_lending(
-            e.clone(), lender2.clone(), Category::Resource, TokenId(804));
+            e.clone(),
+            lender2.clone(),
+            Category::Resource,
+            TokenId(804),
+        );
         lending2.lent_at = lending2.lent_at.saturating_sub(7_200);
-        let key2 = crate::storage_types::DataKey::Lending(lender2.clone(), Category::Resource, TokenId(804));
+        let key2 = crate::storage_types::DataKey::Lending(
+            lender2.clone(),
+            Category::Resource,
+            TokenId(804),
+        );
         e.storage().persistent().set(&key2, &lending2);
     });
 
@@ -1340,7 +1461,9 @@ fn lb_withdraw_emits_index_updated() {
     e.as_contract(&contract_id, || {
         let mut st = crate::admin::read_state(&e);
         st.total_interest = 0;
-        if st.w_total == 0 { st.w_total = 10; }
+        if st.w_total == 0 {
+            st.w_total = 10;
+        }
         // Ensure pool has enough liquidity to pay principal_net on withdraw
         st.total_offer = st.total_offer.saturating_add(1_000);
         crate::admin::write_state(&e, &st);
@@ -1350,13 +1473,20 @@ fn lb_withdraw_emits_index_updated() {
     // Assert idx_upd event present
     let evs = e.events().all();
     let idx_updated = evs.iter().any(|(_, topics, _)| {
-        if topics.len() == 0 { return false; }
+        if topics.len() == 0 {
+            return false;
+        }
         let v = topics.get(0).unwrap();
         if let Ok(sym) = Symbol::try_from_val(&e, &v) {
             sym == symbol_short!("idx_upd")
-        } else { false }
+        } else {
+            false
+        }
     });
-    assert!(idx_updated, "expected idx_upd event on withdraw with deficit and active loans");
+    assert!(
+        idx_updated,
+        "expected idx_upd event on withdraw with deficit and active loans"
+    );
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // FAILING TESTS //

@@ -1,3 +1,4 @@
+use crate::event::{emit_deck_completed, emit_deck_place, emit_deck_remove, emit_deck_replace};
 use crate::{admin::read_config, user_info::mint_terry, *};
 use admin::{read_balance, write_balance};
 use metadata::read_metadata;
@@ -5,7 +6,6 @@ use nft_info::{read_nft, write_nft, Action};
 use soroban_sdk::{log, vec, Address, Env, Vec};
 use storage_types::{DataKey, Deck, TokenId, BALANCE_BUMP_AMOUNT, BALANCE_LIFETIME_THRESHOLD};
 use user_info::read_user;
-use crate::event::{emit_deck_place, emit_deck_replace, emit_deck_remove, emit_deck_completed};
 
 fn write_deck(env: Env, user: Address, deck: Deck) {
     let owner = read_user(&env, user).owner;

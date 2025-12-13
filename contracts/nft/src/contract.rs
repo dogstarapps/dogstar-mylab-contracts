@@ -551,11 +551,23 @@ impl NFT {
         } else {
             0
         };
+
+        let registered = read_registered_tokens(&env);
+        let mut generic_rewards = Vec::new(&env);
+        for token in registered.iter() {
+            let amt = read_accumulated_by_token(&env, &token);
+            if amt > 0 {
+                let reward_amt = (amt * share as i128) / PRECISION as i128;
+                generic_rewards.push_back(GenericTokenAmount { token: token.clone(), amount: reward_amt });
+            }
+        }
+
         PendingReward {
             round_number: current_round,
             terry_amount: (balance.accumulated_terry * share as i128) / PRECISION as i128,
             power_amount: (balance.accumulated_power as u128 * share / PRECISION) as u32,
             xtar_amount: (balance.accumulated_xtar * share as i128) / PRECISION as i128,
+            generic_tokens: generic_rewards,
             status: RewardStatus::Pending,
         }
     }
@@ -580,13 +592,27 @@ impl NFT {
         pending
     }
 
-    pub fn accumulate_pot(env: Env, terry: i128, power: u32, xtar: i128, from: Option<Address>, action: Option<Action>) {
+    pub fn accumulate_pot(env: Env, terry: i128, power: u32, xtar: i128, from: Option<Address>, action: Option<Action>) {                                      
+        if xtar < 0 {
+            panic!("Negative XTAR contributions not allowed");
+        }
+
         let admin = read_administrator(&env);
         admin.require_auth();
         let config = read_config(&env);
+
+        if xtar > 0 {
+            let funding_source = from.clone().unwrap_or_else(|| admin.clone());
+            if funding_source != admin {
+                funding_source.require_auth();
+            }
+            let token_client = token::Client::new(&env, &config.xtar_token);
+            token_client.transfer(&funding_source, &env.current_contract_address(), &xtar);
+        }
+
         let mut pot_balance = read_pot_balance(&env);
         let mut vault = read_contract_vault(&env);
-        
+
         let fee_percentage = config.dogstar_fee_percentage;
         let terry_fee = (terry * fee_percentage as i128) / 10000;
         let power_fee = (power * fee_percentage) / 10000;
@@ -898,7 +924,9 @@ impl NFT {
         get_eligible_players(&env)
     }
 
-    pub fn get_eligible_players_with_shares(env: Env) -> Vec<(Address, u32, u32, u32)> {
+    pub fn get_eligible_players_with_shares(
+        env: Env,
+    ) -> Vec<(Address, u32, u32, u32, Vec<(u32, u32, Category)>, u32)> {
         get_eligible_players_with_shares(&env)
     }
 

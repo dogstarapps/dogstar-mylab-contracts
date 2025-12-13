@@ -1,3 +1,7 @@
+use crate::event::{
+    emit_borrow, emit_index_updated, emit_lend, emit_loan_liquidated, emit_loan_touched,
+    emit_repay, emit_withdraw,
+};
 use crate::{
     admin::{read_state, write_state},
     user_info::mint_terry,
@@ -6,9 +10,10 @@ use crate::{
 use admin::{read_balance, read_config, write_balance};
 use nft_info::{read_nft, write_nft, Action, Category};
 use soroban_sdk::{contracttype, symbol_short, vec, Address, Env, Vec};
-use storage_types::{DataKey, TokenId, BorrowMeta, BALANCE_BUMP_AMOUNT, BALANCE_LIFETIME_THRESHOLD};
+use storage_types::{
+    BorrowMeta, DataKey, TokenId, BALANCE_BUMP_AMOUNT, BALANCE_LIFETIME_THRESHOLD,
+};
 use user_info::{read_user, write_user};
-use crate::event::{emit_lend, emit_borrow, emit_withdraw, emit_repay, emit_index_updated, emit_loan_touched, emit_loan_liquidated};
 
 const SCALE: u64 = 1_000_000; // 6-decimal fixed point
 const APY_MIN: u64 = 0; // 0% APY
@@ -81,7 +86,6 @@ pub fn write_lending(
 }
 
 pub fn read_lending(env: Env, user: Address, category: Category, token_id: TokenId) -> Lending {
-    
     let owner = read_user(&env, user).owner;
 
     let key = DataKey::Lending(owner.clone(), category.clone(), token_id.clone());
@@ -243,7 +247,9 @@ pub fn calculate_apy(
     let mul = (u_fp * time_factor) / one;
     let apy_range = (APY_MAX - APY_MIN) as u128;
     let mut apy = (APY_MIN as u128) + (apy_range * mul) / one;
-    if apy > APY_MAX as u128 { apy = APY_MAX as u128; }
+    if apy > APY_MAX as u128 {
+        apy = APY_MAX as u128;
+    }
     apy as u64
 }
 
@@ -370,7 +376,10 @@ pub fn borrow(env: Env, user: Address, category: Category, token_id: TokenId, po
     // config already read above
 
     let mut state = read_state(&env);
-    assert!(state.total_offer >= borrow_amount as u64, "Insufficient power to borrow");
+    assert!(
+        state.total_offer >= borrow_amount as u64,
+        "Insufficient power to borrow"
+    );
 
     // Pre-validate using hypothetical post-borrow state (no mutation yet)
     let offer_after = state.total_offer.saturating_sub(borrow_amount as u64);
@@ -389,14 +398,11 @@ pub fn borrow(env: Env, user: Address, category: Category, token_id: TokenId, po
     );
 
     // k = APY * T_MAX in fixed point
-    let k_fp = (apy as u128)
-        .saturating_mul(T_MAX_FP as u128)
-        / (SCALE as u128);
+    let k_fp = (apy as u128).saturating_mul(T_MAX_FP as u128) / (SCALE as u128);
     assert!(k_fp < SCALE as u128, "Invalid horizon: APY*T_max >= 1");
     // Reserve = P * k / (1 - k)
-    let reserve = (borrow_amount as u128)
-        .saturating_mul(k_fp)
-        / ((SCALE as u128).saturating_sub(k_fp));
+    let reserve =
+        (borrow_amount as u128).saturating_mul(k_fp) / ((SCALE as u128).saturating_sub(k_fp));
 
     // Fee and buffer checks
     let buffer_bps: u32 = 500; // 5% default safety buffer
@@ -421,7 +427,6 @@ pub fn borrow(env: Env, user: Address, category: Category, token_id: TokenId, po
     write_nft(&env, owner.clone(), token_id.clone(), nft);
 
     let mut balance = read_balance(&env);
-
 
     balance.haw_ai_power += power_fee;
 
@@ -453,7 +458,11 @@ pub fn borrow(env: Env, user: Address, category: Category, token_id: TokenId, po
             weight: (reserve as u32),
             reserve_remaining: (reserve as u32),
         };
-        let key = crate::storage_types::DataKey::BorrowMeta(owner.clone(), category.clone(), token_id.clone());
+        let key = crate::storage_types::DataKey::BorrowMeta(
+            owner.clone(),
+            category.clone(),
+            token_id.clone(),
+        );
         env.storage().persistent().set(&key, &meta);
         st.w_total = st.w_total.saturating_add(reserve as u64);
         write_state(&env, &st);
@@ -469,7 +478,13 @@ pub fn borrow(env: Env, user: Address, category: Category, token_id: TokenId, po
     write_balance(&env, &balance);
 }
 
-pub fn borrow_quote(env: Env, user: Address, category: Category, token_id: TokenId, power: u32) -> BorrowQuote {
+pub fn borrow_quote(
+    env: Env,
+    user: Address,
+    category: Category,
+    token_id: TokenId,
+    power: u32,
+) -> BorrowQuote {
     let owner = read_user(&env, user).owner;
     let config = read_config(&env);
     let fee = power.saturating_mul(config.power_action_fee) / 100;
@@ -505,9 +520,7 @@ pub fn borrow_quote(env: Env, user: Address, category: Category, token_id: Token
     }
 
     let offer_after = st.total_offer.saturating_sub(borrow_net as u64);
-    let borrowed_after = st
-        .total_borrowed_power
-        .saturating_add(borrow_net as u64);
+    let borrowed_after = st.total_borrowed_power.saturating_add(borrow_net as u64);
     let active_loans_after = st.active_loans.saturating_add(1);
 
     let apy = calculate_apy(
@@ -518,9 +531,7 @@ pub fn borrow_quote(env: Env, user: Address, category: Category, token_id: Token
         config.apy_alpha as u64,
     );
 
-    let k_fp = (apy as u128)
-        .saturating_mul(T_MAX_FP as u128)
-        / (SCALE as u128);
+    let k_fp = (apy as u128).saturating_mul(T_MAX_FP as u128) / (SCALE as u128);
     if k_fp >= SCALE as u128 {
         return BorrowQuote {
             allowed: false,
@@ -534,9 +545,8 @@ pub fn borrow_quote(env: Env, user: Address, category: Category, token_id: Token
         };
     }
 
-    let reserve = ((borrow_net as u128)
-        .saturating_mul(k_fp))
-        / ((SCALE as u128).saturating_sub(k_fp));
+    let reserve =
+        ((borrow_net as u128).saturating_mul(k_fp)) / ((SCALE as u128).saturating_sub(k_fp));
     let buffer_bps: u32 = 500; // 5%
     let collateral_net = (nft.power as u128).saturating_sub(fee as u128);
     let buffer = (collateral_net.saturating_mul(buffer_bps as u128)) / 10_000u128;
@@ -550,7 +560,8 @@ pub fn borrow_quote(env: Env, user: Address, category: Category, token_id: Token
         let numer = (nft.power as u128)
             .saturating_sub(fee as u128)
             .saturating_sub(buffer);
-        let borrow_net_max = (numer.saturating_mul((SCALE as u128).saturating_sub(k_fp))) / (SCALE as u128);
+        let borrow_net_max =
+            (numer.saturating_mul((SCALE as u128).saturating_sub(k_fp))) / (SCALE as u128);
         let gross_suggested = ((borrow_net_max as u128) * 100u128)
             / ((100u128).saturating_sub(config.power_action_fee as u128));
         return BorrowQuote {
@@ -623,7 +634,10 @@ pub fn repay(env: Env, user: Address, category: Category, token_id: TokenId) {
 
     let mut state = read_state(&env);
 
-    let loan_duration_seconds = env.ledger().timestamp().saturating_sub(borrowing.borrowed_at);
+    let loan_duration_seconds = env
+        .ledger()
+        .timestamp()
+        .saturating_sub(borrowing.borrowed_at);
 
     let apy = calculate_apy(
         state.total_borrowed_power,
@@ -656,12 +670,25 @@ pub fn repay(env: Env, user: Address, category: Category, token_id: TokenId) {
     // Emit repay event
     emit_repay(&env, &owner);
 
-    remove_borrowing(env.clone(), owner.clone(), category.clone(), token_id.clone());
+    remove_borrowing(
+        env.clone(),
+        owner.clone(),
+        category.clone(),
+        token_id.clone(),
+    );
     // cleanup meta and w_total
     {
         let mut st = read_state(&env);
-        let key = crate::storage_types::DataKey::BorrowMeta(owner.clone(), category.clone(), token_id.clone());
-        if let Some(meta) = env.storage().persistent().get::<_, crate::storage_types::BorrowMeta>(&key) {
+        let key = crate::storage_types::DataKey::BorrowMeta(
+            owner.clone(),
+            category.clone(),
+            token_id.clone(),
+        );
+        if let Some(meta) = env
+            .storage()
+            .persistent()
+            .get::<_, crate::storage_types::BorrowMeta>(&key)
+        {
             st.w_total = st.w_total.saturating_sub(meta.reserve_remaining as u64);
         }
         env.storage().persistent().remove(&key);
@@ -690,8 +717,12 @@ fn check_liquidations(env: Env) {
             state.total_loan_count,
             config.apy_alpha as u64,
         );
-    let loan_duration_seconds = env.ledger().timestamp().saturating_sub(borrowing.borrowed_at);
-    let interest_amount = calculate_interest(borrowing.power as u64, apy, loan_duration_seconds);
+        let loan_duration_seconds = env
+            .ledger()
+            .timestamp()
+            .saturating_sub(borrowing.borrowed_at);
+        let interest_amount =
+            calculate_interest(borrowing.power as u64, apy, loan_duration_seconds);
 
         if nft.power < borrowing.power + interest_amount as u32 {
             state.total_interest += nft.power as u64;
@@ -755,9 +786,13 @@ pub fn touch_loans(env: Env, loans: Vec<(Address, Category, TokenId)>) {
         if let Some(mut meta) = env.storage().persistent().get::<_, BorrowMeta>(&key) {
             // pending = (L - lastL) * weight / SCALE
             let l_delta = state.l_index.saturating_sub(meta.last_l_index);
-            if l_delta == 0 || meta.weight == 0 || meta.reserve_remaining == 0 { continue; }
+            if l_delta == 0 || meta.weight == 0 || meta.reserve_remaining == 0 {
+                continue;
+            }
             let pending = ((l_delta as u128) * (meta.weight as u128) / (SCALE as u128)) as u32;
-            if pending == 0 { continue; }
+            if pending == 0 {
+                continue;
+            }
             // Apply haircut bounded by reserve_remaining
             let haircut = pending.min(meta.reserve_remaining);
             meta.reserve_remaining = meta.reserve_remaining.saturating_sub(haircut);

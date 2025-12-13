@@ -133,13 +133,16 @@ pub fn write_user_claimable_balance(e: &Env, user: &Address, balance: &UserClaim
 
 pub fn read_user_claimable_balance(e: &Env, user: &Address) -> UserClaimableBalance {
     let key = DataKey::UserClaimableBalance(user.clone());
-    e.storage().persistent().get(&key).unwrap_or(UserClaimableBalance {
-        terry: 0,
-        power: 0,
-        xtar: 0,
-        last_claim_round: 0,
-        last_claim_timestamp: 0,
-    })
+    e.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(UserClaimableBalance {
+            terry: 0,
+            power: 0,
+            xtar: 0,
+            last_claim_round: 0,
+            last_claim_timestamp: 0,
+        })
 }
 
 pub fn write_dogstar_claimable(e: &Env, balance: &UserClaimableBalance) {
@@ -149,11 +152,14 @@ pub fn write_dogstar_claimable(e: &Env, balance: &UserClaimableBalance) {
 
 pub fn read_dogstar_claimable(e: &Env) -> UserClaimableBalance {
     let key = DataKey::DogstarClaimableBalance;
-    e.storage().persistent().get(&key).unwrap_or(UserClaimableBalance {
-        terry: 0,
-        power: 0,
-        xtar: 0,
-        last_claim_round: 0,
-        last_claim_timestamp: 0,
-    })
+    e.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(UserClaimableBalance {
+            terry: 0,
+            power: 0,
+            xtar: 0,
+            last_claim_round: 0,
+            last_claim_timestamp: 0,
+        })
 }
