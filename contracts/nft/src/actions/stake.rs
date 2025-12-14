@@ -3,7 +3,7 @@ use crate::{user_info::mint_terry, *};
 use admin::{read_balance, read_config, read_state, write_balance, write_state};
 use nft_info::{read_nft, write_nft, Action, Category};
 use soroban_sdk::{contracttype, vec, Address, Env, Vec};
-use storage_types::{DataKey, TokenId, BALANCE_BUMP_AMOUNT, BALANCE_LIFETIME_THRESHOLD};
+use storage_types::{DataKey, TokenId, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS};
 use user_info::read_user;
 
 #[contracttype]
@@ -24,7 +24,7 @@ pub fn write_stake(env: &Env, user: Address, category: Category, token_id: Token
     env.storage().persistent().set(&key, &stake);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 
     let key = DataKey::Stakes;
     let mut stakes = read_stakes(env.clone());
@@ -40,7 +40,7 @@ pub fn write_stake(env: &Env, user: Address, category: Category, token_id: Token
 
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 }
 
 pub fn read_stakes(env: Env) -> Vec<Stake> {
@@ -59,8 +59,8 @@ pub fn remove_stake(env: &Env, user: Address, category: Category, token_id: Toke
     if env.storage().persistent().has(&key) {
         env.storage().persistent().extend_ttl(
             &key,
-            BALANCE_LIFETIME_THRESHOLD,
-            BALANCE_BUMP_AMOUNT,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
         );
     }
 
@@ -78,8 +78,8 @@ pub fn remove_stake(env: &Env, user: Address, category: Category, token_id: Toke
     {
         env.storage().persistent().extend_ttl(
             &key,
-            BALANCE_LIFETIME_THRESHOLD,
-            BALANCE_BUMP_AMOUNT,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
         );
     }
 }
@@ -91,8 +91,8 @@ pub fn read_stake(env: &Env, user: Address, category: Category, token_id: TokenI
     {
         env.storage().persistent().extend_ttl(
             &key,
-            BALANCE_LIFETIME_THRESHOLD,
-            BALANCE_BUMP_AMOUNT,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
         );
     }
     env.storage().persistent().get(&key).unwrap()
@@ -256,7 +256,7 @@ pub fn unstake(env: Env, user: Address, category: Category, token_id: TokenId) {
     }
 
     let interest_amount = stake.power * stake.interest_percentage / 100;
-    let staked_power = stake.power;
+    let _staked_power = stake.power;
     nft.power += stake.power + interest_amount;
     nft.locked_by_action = Action::None;
 

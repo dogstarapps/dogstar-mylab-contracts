@@ -1,10 +1,10 @@
 use crate::actions::deck::read_deck;
 use crate::event::*;
 use crate::storage_types::{
-    DataKey, Deck, DogstarBalance, PendingReward, PlayerReward, PotBalance, PotSnapshot, GenericTokenAmount,
+    DataKey, Deck, DogstarBalance, PendingReward, PlayerReward, PotBalance,
+    PotSnapshot, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS,
 };
-use crate::admin::{read_config};
-use crate::storage_types::UserClaimableBalance;
+use crate::admin::read_config;
 use crate::nft_info::{Action, Category, read_nft};
 use crate::metadata::read_metadata;
 use crate::user_info::read_user;
@@ -21,9 +21,17 @@ pub fn calculate_effective_power(base_power: u32, deck_bonus: u32) -> u32 {
 
 // Pot Balance Management
 pub fn read_pot_balance(env: &Env) -> PotBalance {
+    let key = DataKey::PotBalance;
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     env.storage()
         .persistent()
-        .get(&DataKey::PotBalance)
+        .get(&key)
         .unwrap_or(PotBalance {
             accumulated_terry: 0,
             accumulated_power: 0,
@@ -38,12 +46,25 @@ pub fn write_pot_balance(env: &Env, balance: &PotBalance) {
     env.storage()
         .persistent()
         .set(&DataKey::PotBalance, balance);
+    env.storage().persistent().extend_ttl(
+        &DataKey::PotBalance,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn read_dogstar_balance(env: &Env) -> DogstarBalance {
+    let key = DataKey::DogstarBalance;
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     env.storage()
         .persistent()
-        .get(&DataKey::DogstarBalance)
+        .get(&key)
         .unwrap_or(DogstarBalance {
             terry: 0,
             power: 0,
@@ -55,6 +76,11 @@ pub fn write_dogstar_balance(env: &Env, balance: &DogstarBalance) {
     env.storage()
         .persistent()
         .set(&DataKey::DogstarBalance, balance);
+    env.storage().persistent().extend_ttl(
+        &DataKey::DogstarBalance,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 // Internal helper to accumulate pot balances and dogstar fees without requiring admin auth.
@@ -93,44 +119,88 @@ pub fn write_pot_snapshot(env: &Env, round: u32, snapshot: &PotSnapshot) {
     let key = DataKey::OpeningSnapshot(round);
 
     env.storage().persistent().set(&key, snapshot);
+    env.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 // Multi‑asset helpers
 pub fn read_registered_tokens(env: &Env) -> Vec<Address> {
+    let key = DataKey::RegisteredTokens;
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     env.storage()
         .persistent()
-        .get(&DataKey::RegisteredTokens)
+        .get(&key)
         .unwrap_or_else(|| Vec::new(env))
 }
 
 pub fn write_registered_tokens(env: &Env, tokens: &Vec<Address>) {
-    env.storage().persistent().set(&DataKey::RegisteredTokens, tokens);
+    env.storage()
+        .persistent()
+        .set(&DataKey::RegisteredTokens, tokens);
+    env.storage().persistent().extend_ttl(
+        &DataKey::RegisteredTokens,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn read_accumulated_by_token(env: &Env, token: &Address) -> i128 {
+    let key = DataKey::AccumulatedByToken(token.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     env.storage()
         .persistent()
-        .get(&DataKey::AccumulatedByToken(token.clone()))
+        .get(&key)
         .unwrap_or(0)
 }
 
 pub fn write_accumulated_by_token(env: &Env, token: &Address, amount: i128) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::AccumulatedByToken(token.clone()), &amount);
+    let key = DataKey::AccumulatedByToken(token.clone());
+    env.storage().persistent().set(&key, &amount);
+    env.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn read_user_generic_claimable(env: &Env, user: &Address, token: &Address) -> i128 {
+    let key = DataKey::UserGenericClaimable(user.clone(), token.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     env.storage()
         .persistent()
-        .get(&DataKey::UserGenericClaimable(user.clone(), token.clone()))
+        .get(&key)
         .unwrap_or(0)
 }
 
 pub fn write_user_generic_claimable(env: &Env, user: &Address, token: &Address, amount: i128) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::UserGenericClaimable(user.clone(), token.clone()), &amount);
+    let key = DataKey::UserGenericClaimable(user.clone(), token.clone());
+    env.storage().persistent().set(&key, &amount);
+    env.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn read_pot_snapshot(env: &Env, round: u32) -> Option<PotSnapshot> {
@@ -143,6 +213,11 @@ pub fn write_player_reward(env: &Env, round: u32, player: &Address, reward: &Pla
     let key = DataKey::PlayerShare(round, player.clone());
 
     env.storage().persistent().set(&key, reward);
+    env.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn read_player_reward(env: &Env, round: u32, player: &Address) -> Option<PlayerReward> {
@@ -153,22 +228,40 @@ pub fn read_player_reward(env: &Env, round: u32, player: &Address) -> Option<Pla
 
 pub fn write_pending_reward(env: &Env, round: u32, player: &Address, reward: &PendingReward) {
     let key = DataKey::PendingReward(round, player.clone());
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, POT_LIFETIME_THRESHOLD, POT_BUMP_AMOUNT);
     env.storage().persistent().set(&key, reward);
+    env.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn read_pending_reward(env: &Env, round: u32, player: &Address) -> Option<PendingReward> {
+    let key = DataKey::PendingReward(round, player.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     env.storage()
         .persistent()
-        .get(&DataKey::PendingReward(round, player.clone()))
+        .get(&key)
 }
 
 pub fn get_current_round(env: &Env) -> u32 {
+    let key = DataKey::CurrentRound;
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     env.storage()
         .persistent()
-        .get(&DataKey::CurrentRound)
+        .get(&key)
         .unwrap_or(0)
 }
 
@@ -176,12 +269,25 @@ pub fn set_current_round(env: &Env, round: u32) {
     env.storage()
         .persistent()
         .set(&DataKey::CurrentRound, &round);
+    env.storage().persistent().extend_ttl(
+        &DataKey::CurrentRound,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn get_all_rounds(env: &Env) -> Vec<u32> {
+    let key = DataKey::AllRounds;
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     env.storage()
         .persistent()
-        .get(&DataKey::AllRounds)
+        .get(&key)
         .unwrap_or_else(|| Vec::new(env))
 }
 
@@ -190,14 +296,28 @@ pub fn add_round(env: &Env, round: u32) {
     rounds.push_back(round);
 
     env.storage().persistent().set(&DataKey::AllRounds, &rounds);
+    env.storage().persistent().extend_ttl(
+        &DataKey::AllRounds,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn get_eligible_players(env: &Env) -> Vec<Address> {
     let mut eligible_players = Vec::new(env);
+    let key = DataKey::Decks;
+    // Extend TTL for the global decks list to ensure it stays alive during pot distribution
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     let decks = env
         .storage()
         .persistent()
-        .get::<DataKey, Vec<Deck>>(&DataKey::Decks)
+        .get::<DataKey, Vec<Deck>>(&key)
         .unwrap_or(Vec::new(env));
 
     for deck in decks.iter() {

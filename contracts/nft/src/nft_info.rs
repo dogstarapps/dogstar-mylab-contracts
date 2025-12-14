@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, log, Address, Env};
 
-use crate::storage_types::{DataKey, TokenId, BALANCE_BUMP_AMOUNT, BALANCE_LIFETIME_THRESHOLD};
+use crate::storage_types::{DataKey, TokenId, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS};
 
 #[derive(Debug, Clone, PartialEq)]
 #[contracttype]
@@ -69,7 +69,7 @@ pub fn write_nft(env: &Env, owner: Address, token_id: TokenId, card: Card) {
     env.storage().persistent().set(&key, &card);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 }
 
 pub fn read_nft(env: &Env, owner: Address, token_id: TokenId) -> Option<Card> {
@@ -83,8 +83,8 @@ pub fn read_nft(env: &Env, owner: Address, token_id: TokenId) -> Option<Card> {
     if let Some(card) = env.storage().persistent().get::<_, Card>(&key) {
         env.storage().persistent().extend_ttl(
             &key,
-            BALANCE_LIFETIME_THRESHOLD,
-            BALANCE_BUMP_AMOUNT,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
         );
         Some(card)
     } else {
@@ -99,8 +99,5 @@ pub fn exists(env: &Env, owner: Address, token_id: TokenId) -> bool {
 
 pub fn remove_nft(env: &Env, owner: Address, token_id: TokenId) {
     let key = DataKey::Card(owner, token_id.clone());
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
     env.storage().persistent().remove(&key);
 }

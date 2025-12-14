@@ -1,6 +1,6 @@
 use crate::nft_info::Action;
 use crate::storage_types::{PendingReward, PlayerReward, PotSnapshot};
-use soroban_sdk::{symbol_short, Address, BytesN, Env, String};
+use soroban_sdk::{symbol_short, Address, Env};
 
 // Event Emission
 /// Emits an event when the pot is opened.

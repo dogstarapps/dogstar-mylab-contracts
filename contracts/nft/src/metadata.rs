@@ -1,8 +1,8 @@
-use soroban_sdk::{contracttype, Env, String, Vec};
+use soroban_sdk::{contracttype, Env, Vec};
 
 use crate::{
     nft_info::Category,
-    storage_types::{DataKey, TokenId},
+    storage_types::{DataKey, TokenId, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS},
 };
 
 #[derive(Clone)]
@@ -32,6 +32,10 @@ pub fn read_metadata(e: &Env, token_id: u32) -> CardMetadata {
 pub fn write_metadata(e: &Env, token_id: u32, metadata: CardMetadata) {
     let key = DataKey::TokenId(token_id);
     e.storage().instance().set(&key, &metadata);
+    e.storage().instance().extend_ttl(
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 
     // Recuperamos el listado actual de todos los TokenIds
     let mut all_card_ids: Vec<TokenId> = e
@@ -51,5 +55,10 @@ pub fn write_metadata(e: &Env, token_id: u32, metadata: CardMetadata) {
         e.storage()
             .persistent()
             .set(&DataKey::AllCardIds, &all_card_ids);
+        e.storage().persistent().extend_ttl(
+            &DataKey::AllCardIds,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
     }
 }

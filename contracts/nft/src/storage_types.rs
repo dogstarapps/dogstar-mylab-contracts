@@ -8,6 +8,10 @@ pub(crate) const INSTANCE_LIFETIME_THRESHOLD: u32 = INSTANCE_BUMP_AMOUNT - DAY_I
 pub(crate) const BALANCE_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 pub(crate) const BALANCE_LIFETIME_THRESHOLD: u32 = BALANCE_BUMP_AMOUNT - DAY_IN_LEDGERS;
 
+pub(crate) const LEDGERS_PER_DAY: u32 = 17280;
+pub(crate) const STORAGE_BUMP_LEDGERS: u32 = 180 * LEDGERS_PER_DAY; // ~180 days ~3,110,400
+pub(crate) const STORAGE_THRESHOLD_LEDGERS: u32 = 30 * LEDGERS_PER_DAY; // ~30 days ~518,400
+
 #[derive(Debug, Clone, PartialEq)]
 #[contracttype]
 pub struct TokenId(pub u32);

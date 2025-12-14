@@ -2,7 +2,7 @@ use crate::{nft_info::remove_nft, user_info::mint_terry, *};
 use admin::{read_balance, read_config, write_balance};
 use nft_info::{read_nft, write_nft, Action, Category};
 use soroban_sdk::{contracttype, log, symbol_short, vec, Address, Env, IntoVal, Symbol, Val, Vec};
-use storage_types::{DataKey, TokenId, BALANCE_BUMP_AMOUNT, BALANCE_LIFETIME_THRESHOLD};
+use storage_types::{DataKey, TokenId, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS};
 use user_info::read_user;
 
 use super::remove_owner_card;
@@ -59,7 +59,7 @@ pub fn write_fight(env: Env, user: Address, category: Category, token_id: TokenI
     env.storage().persistent().set(&key, &fight);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 
     let key = DataKey::Fights;
     let mut fights = read_fights(env.clone());
@@ -75,7 +75,7 @@ pub fn write_fight(env: Env, user: Address, category: Category, token_id: TokenI
 
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 
     env.events().publish(
         (symbol_short!("fight"), symbol_short!("open")),
@@ -89,7 +89,7 @@ pub fn read_fight(env: Env, user: Address, category: Category, token_id: TokenId
     let key = DataKey::Fight(owner.clone(), category.clone(), token_id.clone());
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
     env.storage().persistent().get(&key).unwrap()
 }
 
@@ -118,7 +118,7 @@ pub fn remove_fight(env: Env, user: Address, category: Category, token_id: Token
 
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 
     log!(&env, "remove_fight >> ", owner.clone());
     let key = DataKey::Fight(owner.clone(), category.clone(), token_id.clone());

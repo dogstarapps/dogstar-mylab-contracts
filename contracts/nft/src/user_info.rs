@@ -1,6 +1,8 @@
 use crate::error::MyLabError;
 use crate::nft_info::read_nft;
-use crate::storage_types::{DataKey, Level, TokenId, User};
+use crate::storage_types::{
+    DataKey, Level, TokenId, User, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS,
+};
 use soroban_sdk::{log, Address, Env, Vec};
 
 pub fn add_card_to_owner(env: &Env, token_id: TokenId, user: Address) -> Result<(), MyLabError> {
@@ -30,18 +32,32 @@ pub fn add_card_to_owner(env: &Env, token_id: TokenId, user: Address) -> Result<
 
 pub fn read_user(e: &Env, user: Address) -> User {
     let key = DataKey::User(user.clone());
-    e.storage().persistent().get(&key).unwrap_or(User {
-        owner: user,
-        power: 0,
-        terry: 0,
-        total_history_terry: 0,
-        level: 1,
-    })
+    if let Some(user_data) = e.storage().persistent().get::<_, User>(&key) {
+        e.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        user_data
+    } else {
+        User {
+            owner: user,
+            power: 0,
+            terry: 0,
+            total_history_terry: 0,
+            level: 1,
+        }
+    }
 }
 
 pub fn write_user(e: &Env, user: Address, user_info: User) {
     let key = DataKey::User(user);
     e.storage().persistent().set(&key, &user_info);
+    e.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn get_user_level(e: &Env, user: Address) -> u32 {
@@ -50,14 +66,30 @@ pub fn get_user_level(e: &Env, user: Address) -> u32 {
     log!(&e, "get_user_level >> User balance {}", balance);
 
     // Fetch the last level ID from storage
-    let last_level_id = e
-        .storage()
-        .persistent()
-        .get(&DataKey::LevelId)
-        .unwrap_or(0u32);
+    let last_level_id = if e.storage().persistent().has(&DataKey::LevelId) {
+        e.storage().persistent().extend_ttl(
+            &DataKey::LevelId,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        e.storage()
+            .persistent()
+            .get(&DataKey::LevelId)
+            .unwrap()
+    } else {
+        0u32
+    };
 
     for i in 1..=last_level_id {
-        let level: Level = e.storage().persistent().get(&DataKey::Level(i)).unwrap();
+        let key = DataKey::Level(i);
+        if e.storage().persistent().has(&key) {
+            e.storage().persistent().extend_ttl(
+                &key,
+                STORAGE_THRESHOLD_LEDGERS,
+                STORAGE_BUMP_LEDGERS,
+            );
+        }
+        let level: Level = e.storage().persistent().get(&key).unwrap();
         if balance > level.minimum_terry && balance <= level.maximum_terry {
             return i;
         }
@@ -76,6 +108,11 @@ pub fn write_owner_card(env: &Env, owner: Address, token_ids: Vec<TokenId>) {
     );
     let key = DataKey::OwnerOwnedCardIds(owner);
     env.storage().persistent().set(&key, &token_ids);
+    env.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn read_owner_card(env: &Env, owner: Address) -> Vec<TokenId> {
@@ -90,6 +127,17 @@ pub fn read_owner_card(env: &Env, owner: Address) -> Vec<TokenId> {
         log!(&env, "Not found cards for owner {}", owner.clone());
         let empty_vec: Vec<TokenId> = Vec::new(&env);
         env.storage().persistent().set(&key, &empty_vec);
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    } else {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
     }
 
     let card_list: Vec<TokenId> = env
