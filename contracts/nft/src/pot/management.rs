@@ -4,15 +4,12 @@ use crate::storage_types::{
     DataKey, Deck, DogstarBalance, PendingReward, PlayerReward, PotBalance,
     PotSnapshot, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS,
 };
-use crate::admin::read_config;
+use crate::admin::{read_config, read_contract_vault, write_contract_vault};
+use crate::event::*;
 use crate::nft_info::{Action, Category, read_nft};
 use crate::metadata::read_metadata;
 use crate::user_info::read_user;
 use soroban_sdk::{Address, Env, Vec};
-
-const DAY_IN_LEDGERS: u32 = 17280;
-const POT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
-const POT_LIFETIME_THRESHOLD: u32 = POT_BUMP_AMOUNT - DAY_IN_LEDGERS;
 
 /// Calculates effective power by applying the deck bonus to base power.
 pub fn calculate_effective_power(base_power: u32, deck_bonus: u32) -> u32 {
@@ -102,6 +99,13 @@ pub fn accumulate_pot_internal(env: &Env, terry: i128, power: u32, xtar: i128, f
     pot_balance.last_updated = env.ledger().timestamp();
     write_pot_balance(env, &pot_balance);
 
+    // Update contract vault with new fees
+    let mut vault = read_contract_vault(env);
+    vault.dogstar_terry += terry_fee;
+    vault.dogstar_power += power_fee;
+    vault.dogstar_xtar += xtar_fee;
+    write_contract_vault(env, &vault);
+
     // Update legacy dogstar balance for backward-compat events/UI
     let mut dogstar_balance = read_dogstar_balance(env);
     dogstar_balance.terry += terry_fee;
@@ -112,6 +116,31 @@ pub fn accumulate_pot_internal(env: &Env, terry: i128, power: u32, xtar: i128, f
     if terry_fee > 0 || power_fee > 0 || xtar_fee > 0 {
         emit_dogstar_fee_accumulated(env, terry_fee, power_fee, xtar_fee, fee_percentage, from, action);
     }
+}
+
+pub fn read_dogstar_generic_fee(env: &Env, token: &Address) -> i128 {
+    let key = DataKey::DogstarGenericFee(token.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(0)
+}
+
+pub fn write_dogstar_generic_fee(env: &Env, token: &Address, amount: i128) {
+    let key = DataKey::DogstarGenericFee(token.clone());
+    env.storage().persistent().set(&key, &amount);
+    env.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 // Snapshot Management

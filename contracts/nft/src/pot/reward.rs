@@ -12,7 +12,7 @@ use crate::user_info::{read_user, write_user};
 use soroban_sdk::{Address, Env, Vec};
 
 const MIN_REWARD_AMOUNT: i128 = 1;
-const MIN_XLM_RESERVE: i128 = 500_0000; // 0.5 XLM in stroops
+// const MIN_XLM_RESERVE: i128 = 500_0000; // 0.5 XLM in stroops
 
 // pub fn verify_trustline(e: &Env, player: &Address, token_id: &Address) -> bool {
 //     let token_client = token::Client::new(e, token_id);

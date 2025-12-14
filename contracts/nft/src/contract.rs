@@ -95,11 +95,12 @@ impl NFT {
             vault.dogstar_xtar += fee;
             write_contract_vault(&env, &vault);
         } else {
-            // Generic token: accumulate net by token and transfer fee to admin immediately
+            // Generic token: accumulate net by token and accumulate fee in contract storage
             let current = read_accumulated_by_token(&env, &token);
             write_accumulated_by_token(&env, &token, current + net);
             if fee > 0 {
-                client.transfer(&env.current_contract_address(), &admin, &fee);
+                let current_fee = read_dogstar_generic_fee(&env, &token);
+                write_dogstar_generic_fee(&env, &token, current_fee + fee);
             }
         }
     }
@@ -686,73 +687,91 @@ impl NFT {
         bump_instance(&env);
         assert!(claimer == admin, "Only admin can claim dogstar fees");
         
-        // Read the claimable balance for dogstar
-        let mut claimable = read_dogstar_claimable(&env);
         let config = read_config(&env);
+        let mut vault = read_contract_vault(&env);
         
-        // Check if there are fees to claim
-        if claimable.terry == 0 && claimable.power == 0 && claimable.xtar == 0 {
+        let terry_to_claim = vault.dogstar_terry;
+        let power_to_claim = vault.dogstar_power;
+        let xtar_to_claim = vault.dogstar_xtar;
+
+        // Check for generic fees
+        let registered = read_registered_tokens(&env);
+        let mut has_generic = false;
+        for token in registered.iter() {
+            if read_dogstar_generic_fee(&env, &token) > 0 { has_generic = true; break; }
+        }
+
+        if terry_to_claim == 0 && power_to_claim == 0 && xtar_to_claim == 0 && !has_generic {
             panic!("No fees available to claim");
         }
         
-        let terry_to_claim = claimable.terry;
-        let power_to_claim = claimable.power;
-        let xtar_to_claim = claimable.xtar;
-        
         // Transfer assets to claimer
         if terry_to_claim > 0 {
+            if !env.storage().persistent().has(&DataKey::User(claimer.clone())) {
+                // Auto-create user for admin if it doesn't exist to prevent panic
+                let user_val = User {
+                    owner: claimer.clone(),
+                    power: 0,
+                    terry: 0,
+                    total_history_terry: 0,
+                    level: 1,
+                };
+                write_user(&env, claimer.clone(), user_val);
+            }
             let mut user = read_user(&env, claimer.clone());
             user.terry += terry_to_claim;
             write_user(&env, claimer.clone(), user);
-            claimable.terry = 0;
+            vault.dogstar_terry = 0;
         }
         
         if power_to_claim > 0 {
+            if !env.storage().persistent().has(&DataKey::User(claimer.clone())) {
+                 // Auto-create user for admin if it doesn't exist
+                 let user_val = User {
+                    owner: claimer.clone(),
+                    power: 0,
+                    terry: 0,
+                    total_history_terry: 0,
+                    level: 1,
+                };
+                write_user(&env, claimer.clone(), user_val);
+            }
             let mut user = read_user(&env, claimer.clone());
             user.power += power_to_claim;
             write_user(&env, claimer.clone(), user);
-            claimable.power = 0;
+            vault.dogstar_power = 0;
         }
         
         if xtar_to_claim > 0 {
             let token = token::Client::new(&env, &config.xtar_token);
             token.transfer(&env.current_contract_address(), &claimer, &xtar_to_claim);
-            claimable.xtar = 0;
+            vault.dogstar_xtar = 0;
         }
         
-        // Update claim record
-        claimable.last_claim_timestamp = env.ledger().timestamp();
-        claimable.last_claim_round = get_current_round(&env);
-        write_dogstar_claimable(&env, &claimable);
-        
-        // Update vault to reflect claimed amounts
-        let mut vault = read_contract_vault(&env);
-        vault.dogstar_terry -= terry_to_claim;
-        vault.dogstar_power -= power_to_claim;
-        vault.dogstar_xtar -= xtar_to_claim;
+        // Claim generic tokens
+        for token in registered.iter() {
+            let fee = read_dogstar_generic_fee(&env, &token);
+            if fee > 0 {
+                let client = token::Client::new(&env, &token);
+                client.transfer(&env.current_contract_address(), &claimer, &fee);
+                write_dogstar_generic_fee(&env, &token, 0);
+            }
+        }
+
+        // Write updated vault
         write_contract_vault(&env, &vault);
         
         emit_dogstar_fee_withdrawn(&env, &claimer, terry_to_claim, power_to_claim, xtar_to_claim);
     }
     
     // Admin function to make dogstar fees claimable
+    // DEPRECATED: Fees are now claimed directly from accumulated vault in claim_dogstar_fees
     pub fn release_dogstar_fees(env: Env) {
         let admin = read_administrator(&env);
         admin.require_auth();
         bump_instance(&env);
-        
-        let vault = read_contract_vault(&env);
-        let mut claimable = read_dogstar_claimable(&env);
-        
-        // Move fees from vault to claimable
-        claimable.terry += vault.dogstar_terry;
-        claimable.power += vault.dogstar_power;
-        claimable.xtar += vault.dogstar_xtar;
-        
-        write_dogstar_claimable(&env, &claimable);
-        
-        // Note: We don't zero out vault.dogstar_* here to keep track of total accumulated
-        // The claim function will handle the actual deduction
+        // No-op to prevent double-accounting bug.
+        // Logic moved to unified claim_dogstar_fees.
     }
 
     pub fn open_pot(env: Env, round: u32) -> Result<(), NFTError> {
