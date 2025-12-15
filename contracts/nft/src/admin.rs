@@ -17,19 +17,38 @@ pub fn write_administrator(env: &Env, id: &Address) {
 }
 
 pub fn is_whitelisted(e: &Env, member: &Address) -> bool {
-    e.storage()
-        .persistent()
-        .get(&DataKey::Whitelist(member.clone()))
-        .unwrap_or(false)
+    let key = DataKey::Whitelist(member.clone());
+    if e.storage().persistent().has(&key) {
+        e.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        e.storage().persistent().get(&key).unwrap_or(false)
+    } else {
+        false
+    }
 }
 
 pub fn write_config(e: &Env, config: &Config) {
     let key: DataKey = DataKey::Config;
     e.storage().persistent().set(&key, config);
+    e.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn read_config(e: &Env) -> Config {
     let key = DataKey::Config;
+    if e.storage().persistent().has(&key) {
+        e.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     e.storage().persistent().get(&key).unwrap()
 }
 
@@ -37,10 +56,22 @@ pub fn write_balance(e: &Env, balance: &Balance) {
     // Balance(u32) to track the different tokens balance???
     let key = DataKey::Balance;
     e.storage().persistent().set(&key, balance);
+    e.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn read_balance(e: &Env) -> Balance {
     let key = DataKey::Balance;
+    if e.storage().persistent().has(&key) {
+        e.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     e.storage().persistent().get(&key).unwrap_or(Balance {
         admin_terry: 0,
         admin_power: 0,
@@ -54,12 +85,24 @@ pub fn read_balance(e: &Env) -> Balance {
 pub fn write_state(e: &Env, state: &State) {
     let key = DataKey::State;
     e.storage().persistent().set(&key, state);
+    e.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 
     e.events().publish((symbol_short!("state"),), state.clone());
 }
 
 pub fn read_state(e: &Env) -> State {
     let key = DataKey::State;
+    if e.storage().persistent().has(&key) {
+        e.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     e.storage().persistent().get(&key).unwrap_or(State {
         total_offer: 0,
         total_demand: 0,
@@ -82,6 +125,11 @@ pub fn add_level(e: &Env, level: Level) -> u32 {
     e.storage()
         .persistent()
         .set(&DataKey::Level(level_id), &level);
+    e.storage().persistent().extend_ttl(
+        &DataKey::Level(level_id),
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 
     level_id
 }
@@ -90,18 +138,35 @@ pub fn update_level(e: &Env, level_id: u32, level: Level) {
     e.storage()
         .persistent()
         .set(&DataKey::Level(level_id), &level);
+    e.storage().persistent().extend_ttl(
+        &DataKey::Level(level_id),
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn get_and_increase_level_id(env: &Env) -> u32 {
-    let prev = env
-        .storage()
-        .persistent()
-        .get(&DataKey::LevelId)
-        .unwrap_or(0u32);
+    let key = DataKey::LevelId;
+    let prev = if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        env.storage().persistent().get(&key).unwrap()
+    } else {
+        0u32
+    };
 
     env.storage()
         .persistent()
-        .set(&DataKey::LevelId, &(prev + 1));
+        .set(&key, &(prev + 1));
+    // Extend TTL on write
+    env.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
     prev + 1
 }
 
@@ -109,10 +174,22 @@ pub fn get_and_increase_level_id(env: &Env) -> u32 {
 pub fn write_contract_vault(e: &Env, vault: &ContractVault) {
     let key = DataKey::ContractVault;
     e.storage().persistent().set(&key, vault);
+    e.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn read_contract_vault(e: &Env) -> ContractVault {
     let key = DataKey::ContractVault;
+    if e.storage().persistent().has(&key) {
+        e.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     e.storage().persistent().get(&key).unwrap_or(ContractVault {
         haw_ai_pot_terry: 0,
         haw_ai_pot_power: 0,
@@ -129,10 +206,22 @@ pub fn read_contract_vault(e: &Env) -> ContractVault {
 pub fn write_user_claimable_balance(e: &Env, user: &Address, balance: &UserClaimableBalance) {
     let key = DataKey::UserClaimableBalance(user.clone());
     e.storage().persistent().set(&key, balance);
+    e.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn read_user_claimable_balance(e: &Env, user: &Address) -> UserClaimableBalance {
     let key = DataKey::UserClaimableBalance(user.clone());
+    if e.storage().persistent().has(&key) {
+        e.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     e.storage()
         .persistent()
         .get(&key)
@@ -148,10 +237,22 @@ pub fn read_user_claimable_balance(e: &Env, user: &Address) -> UserClaimableBala
 pub fn write_dogstar_claimable(e: &Env, balance: &UserClaimableBalance) {
     let key = DataKey::DogstarClaimableBalance;
     e.storage().persistent().set(&key, balance);
+    e.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
 }
 
 pub fn read_dogstar_claimable(e: &Env) -> UserClaimableBalance {
     let key = DataKey::DogstarClaimableBalance;
+    if e.storage().persistent().has(&key) {
+        e.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     e.storage()
         .persistent()
         .get(&key)

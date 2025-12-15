@@ -9,9 +9,9 @@ use crate::{
 };
 use admin::{read_balance, read_config, write_balance};
 use nft_info::{read_nft, write_nft, Action, Category};
-use soroban_sdk::{contracttype, symbol_short, vec, Address, Env, Vec};
+use soroban_sdk::{contracttype, vec, Address, Env, Vec};
 use storage_types::{
-    BorrowMeta, DataKey, TokenId, BALANCE_BUMP_AMOUNT, BALANCE_LIFETIME_THRESHOLD,
+    BorrowMeta, DataKey, TokenId, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS,
 };
 use user_info::{read_user, write_user};
 
@@ -66,7 +66,7 @@ pub fn write_lending(
     env.storage().persistent().set(&key, &lending);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 
     let key = DataKey::Lendings;
     let mut lendings = read_lendings(env.clone());
@@ -82,7 +82,7 @@ pub fn write_lending(
 
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 }
 
 pub fn read_lending(env: Env, user: Address, category: Category, token_id: TokenId) -> Lending {
@@ -91,7 +91,7 @@ pub fn read_lending(env: Env, user: Address, category: Category, token_id: Token
     let key = DataKey::Lending(owner.clone(), category.clone(), token_id.clone());
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
     env.storage().persistent().get(&key).unwrap()
 }
 
@@ -103,8 +103,8 @@ pub fn remove_lending(env: Env, user: Address, category: Category, token_id: Tok
     if env.storage().persistent().has(&key) {
         env.storage().persistent().extend_ttl(
             &key,
-            BALANCE_LIFETIME_THRESHOLD,
-            BALANCE_BUMP_AMOUNT,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
         );
     }
 
@@ -120,7 +120,7 @@ pub fn remove_lending(env: Env, user: Address, category: Category, token_id: Tok
 
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 }
 
 pub fn read_lendings(env: Env) -> Vec<Lending> {
@@ -144,7 +144,7 @@ pub fn write_borrowing(
     env.storage().persistent().set(&key, &borrowing);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 
     let key = DataKey::Borrowings;
     let mut borrowings = read_borrowings(env.clone());
@@ -162,7 +162,7 @@ pub fn write_borrowing(
 
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 }
 
 pub fn read_borrowing(env: Env, user: Address, category: Category, token_id: TokenId) -> Borrowing {
@@ -171,7 +171,7 @@ pub fn read_borrowing(env: Env, user: Address, category: Category, token_id: Tok
     let key = DataKey::Borrowing(owner.clone(), category.clone(), token_id.clone());
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
     env.storage().persistent().get(&key).unwrap()
 }
 
@@ -202,7 +202,7 @@ pub fn remove_borrowing(env: Env, user: Address, category: Category, token_id: T
 
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 
     let key = DataKey::Borrowing(owner.clone(), category.clone(), token_id.clone());
     env.storage().persistent().remove(&key);
@@ -464,6 +464,11 @@ pub fn borrow(env: Env, user: Address, category: Category, token_id: TokenId, po
             token_id.clone(),
         );
         env.storage().persistent().set(&key, &meta);
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
         st.w_total = st.w_total.saturating_add(reserve as u64);
         write_state(&env, &st);
     }
@@ -481,7 +486,7 @@ pub fn borrow(env: Env, user: Address, category: Category, token_id: TokenId, po
 pub fn borrow_quote(
     env: Env,
     user: Address,
-    category: Category,
+    _category: Category,
     token_id: TokenId,
     power: u32,
 ) -> BorrowQuote {
@@ -801,6 +806,11 @@ pub fn touch_loans(env: Env, loans: Vec<(Address, Category, TokenId)>) {
             meta.weight = meta.reserve_remaining;
             meta.last_l_index = state.l_index;
             env.storage().persistent().set(&key, &meta);
+            env.storage().persistent().extend_ttl(
+                &key,
+                STORAGE_THRESHOLD_LEDGERS,
+                STORAGE_BUMP_LEDGERS,
+            );
 
             // Reduce collateral POWER if reserve agotada
             let mut ownership_lost = false;

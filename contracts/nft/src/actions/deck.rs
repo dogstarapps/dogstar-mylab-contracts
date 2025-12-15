@@ -4,7 +4,7 @@ use admin::{read_balance, write_balance};
 use metadata::read_metadata;
 use nft_info::{read_nft, write_nft, Action};
 use soroban_sdk::{log, vec, Address, Env, Vec};
-use storage_types::{DataKey, Deck, TokenId, BALANCE_BUMP_AMOUNT, BALANCE_LIFETIME_THRESHOLD};
+use storage_types::{DataKey, Deck, TokenId, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS};
 use user_info::read_user;
 
 fn write_deck(env: Env, user: Address, deck: Deck) {
@@ -16,8 +16,8 @@ fn write_deck(env: Env, user: Address, deck: Deck) {
     {
         env.storage().persistent().extend_ttl(
             &key,
-            BALANCE_LIFETIME_THRESHOLD,
-            BALANCE_BUMP_AMOUNT,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
         );
     }
 
@@ -32,11 +32,18 @@ fn write_deck(env: Env, user: Address, deck: Deck) {
     env.storage().persistent().set(&key, &decks);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BALANCE_LIFETIME_THRESHOLD, BALANCE_BUMP_AMOUNT);
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 }
 
 pub fn read_decks(env: Env) -> Vec<Deck> {
     let key = DataKey::Decks;
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
     env.storage()
         .persistent()
         .get(&key)
@@ -87,8 +94,8 @@ pub fn read_deck(env: Env, user: Address) -> Deck {
     {
         env.storage().persistent().extend_ttl(
             &key,
-            BALANCE_LIFETIME_THRESHOLD,
-            BALANCE_BUMP_AMOUNT,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
         );
     }
 
@@ -115,7 +122,7 @@ pub fn place(env: Env, user: Address, token_id: TokenId) {
     write_nft(&env, user.clone(), token_id.clone(), nft.clone());
     deck.token_ids.push_back(token_id.clone());
 
-    let deck_size = deck.token_ids.len();
+    let _deck_size = deck.token_ids.len();
 
     if deck.token_ids.len() == 4 {
         calculate_deck_balance(env.clone(), user.clone(), &mut deck);
@@ -214,7 +221,7 @@ pub fn remove_place(env: Env, user: Address, token_id: TokenId) {
     deck.bonus = 0;
     deck.deck_categories = 0;
 
-    let deck_size = deck.token_ids.len();
+    let _deck_size = deck.token_ids.len();
 
     write_deck(env.clone(), user.clone(), deck);
     update_haw_ai_percentages(env.clone());
