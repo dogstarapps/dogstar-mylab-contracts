@@ -63,22 +63,33 @@ impl NFT {
         let admin = read_administrator(&e);
         admin.require_auth();
         bump_instance(&e);
-        let mut tokens = read_registered_tokens(&e);
-        // Deduplicate
-        let mut exists = false;
-        for t in tokens.iter() { if t == token { exists = true; break; } }
-        if !exists { tokens.push_back(token); }
-        write_registered_tokens(&e, &tokens);
+        update_registered_tokens(&e, |_, tokens| {
+            let mut exists = false;
+            for t in tokens.iter() {
+                if t == token {
+                    exists = true;
+                    break;
+                }
+            }
+            if !exists {
+                tokens.push_back(token.clone());
+            }
+        });
     }
 
     pub fn unregister_token(e: Env, token: Address) {
         let admin = read_administrator(&e);
         admin.require_auth();
         bump_instance(&e);
-        let tokens = read_registered_tokens(&e);
-        let mut filtered = Vec::new(&e);
-        for t in tokens.iter() { if t != token { filtered.push_back(t); } }
-        write_registered_tokens(&e, &filtered);
+        update_registered_tokens(&e, |env, tokens| {
+            let mut filtered = Vec::new(env);
+            for t in tokens.iter() {
+                if t != token {
+                    filtered.push_back(t);
+                }
+            }
+            *tokens = filtered;
+        });
     }
 
     // Accumulate arbitrary SAC token into pot (net of Dogstar fees will be handled off‑chain for now)
@@ -974,8 +985,9 @@ impl NFT {
         const MAX_FEE_PERCENTAGE: u32 = 5000;
         assert!(fee_percentage <= MAX_FEE_PERCENTAGE, "Fee percentage exceeds maximum (50%)");
 
-        let old_fee = read_config(&env).dogstar_fee_percentage;
+        let mut old_fee = 0;
         update_config(&env, |_, config| {
+            old_fee = config.dogstar_fee_percentage;
             config.dogstar_fee_percentage = fee_percentage;
         });
         emit_dogstar_fee_percentage_updated(&env, old_fee, fee_percentage);

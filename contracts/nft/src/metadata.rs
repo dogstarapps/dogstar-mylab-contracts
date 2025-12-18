@@ -16,14 +16,6 @@ pub struct CardMetadata {
     pub price_terry: i128,
     pub token_id: u32,
 }
-
-/*
-pub(crate) fn write_metadata(e: &Env, token_id : u32,  metadata: CardMetadata)  {
-    let key  = DataKey::TokenId(token_id);
-    e.storage().instance().set(&key, &metadata);
-}
-*/
-
 pub fn read_metadata(e: &Env, token_id: u32) -> CardMetadata {
     let key = DataKey::TokenId(token_id);
     e.storage().instance().get(&key).unwrap()
