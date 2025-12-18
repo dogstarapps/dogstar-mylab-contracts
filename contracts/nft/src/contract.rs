@@ -7,21 +7,22 @@ use crate::actions::{
     lending::{Borrowing, Lending},
     stake, SidePosition,
 };
-use crate::admin::{
+    use crate::admin::{
     add_level, has_administrator, read_administrator, read_balance, read_config, read_state,
     update_level, write_administrator, write_balance, write_config, read_contract_vault,
     write_contract_vault, read_user_claimable_balance, write_user_claimable_balance,
-    read_dogstar_claimable, write_dogstar_claimable,
+    read_dogstar_claimable, write_dogstar_claimable, update_balance, update_contract_vault,
+    update_user_claimable_balance, update_config,
 };
 use crate::error::NFTError;
 use crate::event::*;
 use crate::metadata::{read_metadata, write_metadata, CardMetadata};
-use crate::nft_info::{exists, read_nft, remove_nft, write_nft, Action, Card, Category, Currency};
+use crate::nft_info::{exists, read_nft, remove_nft, update_nft, write_nft, Action, Card, Category, Currency};
 use crate::pot::management::*;
 use crate::storage_types::*;
-use crate::user_info::{
+    use crate::user_info::{
     add_card_to_owner, burn_terry, get_user_level, mint_terry, read_owner_card, read_user,
-    write_owner_card, write_user,
+    write_user, update_owner_cards, update_user,
 };
 
 use soroban_sdk::{
@@ -40,6 +41,23 @@ pub struct NFT;
 
 #[contractimpl]
 impl NFT {
+    // Helper to move an NFT between owners while keeping owner indexes consistent.
+    // No API or logic change: encapsulates the existing pattern remove_nft + write_nft + owner index updates.
+    fn move_nft(env: &Env, from: Address, to: Address, token_id: TokenId, card: Card) {
+        update_owner_cards(env, from.clone(), |_, from_cards| {
+            if let Some(pos) = from_cards.iter().position(|x| x == token_id.clone()) {
+                from_cards.remove(pos.try_into().unwrap());
+            }
+        });
+
+        remove_nft(env, from, token_id.clone());
+        write_nft(env, to.clone(), token_id.clone(), card);
+
+        update_owner_cards(env, to, |_, to_cards| {
+            to_cards.push_back(token_id);
+        });
+    }
+
     // --- Multi‑asset pot admin: token registry ---
     pub fn register_token(e: Env, token: Address) {
         let admin = read_administrator(&e);
@@ -86,21 +104,24 @@ impl NFT {
 
         if token == cfg.xtar_token {
             // XTAR: accumulate net to pot and store fee in vault
-            let mut pot_balance = read_pot_balance(&env);
-            pot_balance.accumulated_xtar += net;
-            pot_balance.last_updated = env.ledger().timestamp();
-            write_pot_balance(&env, &pot_balance);
+            update_pot_balance(&env, |_, pot_balance| {
+                pot_balance.accumulated_xtar += net;
+                pot_balance.last_updated = env.ledger().timestamp();
+            });
 
-            let mut vault = read_contract_vault(&env);
-            vault.dogstar_xtar += fee;
-            write_contract_vault(&env, &vault);
+            update_contract_vault(&env, |_, vault| {
+                vault.dogstar_xtar += fee;
+            });
         } else {
             // Generic token: accumulate net by token and accumulate fee in contract storage
-            let current = read_accumulated_by_token(&env, &token);
-            write_accumulated_by_token(&env, &token, current + net);
+            update_accumulated_by_token(&env, &token, |_, current| {
+                *current += net;
+            });
+            
             if fee > 0 {
-                let current_fee = read_dogstar_generic_fee(&env, &token);
-                write_dogstar_generic_fee(&env, &token, current_fee + fee);
+                update_dogstar_generic_fee(&env, &token, |_, current_fee| {
+                    *current_fee += fee;
+                });
             }
         }
     }
@@ -288,49 +309,35 @@ impl NFT {
 
 
         let config: Config = read_config(&env);
-        let mut balance = read_balance(&env);
-
-        // matches!(buy_currency, Currency::Terry)
-        //     .then(|| {
-        //         assert!(
-        //             user.terry >= card_metadata.price_terry,
-        //             "Not enough terry to mint this card"
-        //         );
-        //     })
-        //     .unwrap_or_else(|| {
-        //         assert!(
-        //             user.power >= card_metadata.price_xtar as u32,
-        //             "Not enough xtar to mint this card"
-        //         );
-        //     });
-
-        if buy_currency == Currency::Terry {
-            let amount = card_metadata.price_terry;
-            assert!(user.terry >= amount, "Not enough terry to burn");
-            let withdrawable_amount = (config.withdrawable_percentage as i128 * amount) / 100;
-            let haw_ai_amount = amount - withdrawable_amount;
-            burn_terry(&env, user.owner.clone(), amount);
-            balance.admin_terry += withdrawable_amount;
-            crate::pot::management::accumulate_pot_internal(&env, haw_ai_amount, 0, 0, Some(user.owner.clone()), Some(Action::Mint));
-        } else {
-            let token = token::Client::new(&env, &config.xtar_token.clone());
-            let burnable_amount =
-                (config.burnable_percentage as i128 * card_metadata.price_xtar) / 100;
-            let haw_ai_amount = card_metadata.price_xtar - burnable_amount;
-            token.burn(&to.clone(), &burnable_amount);
-            
-            // Transfer XTAR to contract instead of external address
-            token.transfer(&to.clone(), &env.current_contract_address(), &haw_ai_amount);
-            
-            // Store XTAR in contract vault
-            let mut vault = read_contract_vault(&env);
-            vault.haw_ai_pot_xtar += haw_ai_amount;
-            write_contract_vault(&env, &vault);
-            
-            balance.haw_ai_xtar += haw_ai_amount;
-            crate::pot::management::accumulate_pot_internal(&env, 0, 0, haw_ai_amount, Some(user.owner.clone()), Some(Action::Mint));
-        };
-        write_balance(&env, &balance);
+        
+        update_balance(&env, |e, balance| {
+            if buy_currency == Currency::Terry {
+                let amount = card_metadata.price_terry;
+                assert!(user.terry >= amount, "Not enough terry to burn");
+                let withdrawable_amount = (config.withdrawable_percentage as i128 * amount) / 100;
+                let haw_ai_amount = amount - withdrawable_amount;
+                burn_terry(e, user.owner.clone(), amount);
+                balance.admin_terry += withdrawable_amount;
+                crate::pot::management::accumulate_pot_internal(e, haw_ai_amount, 0, 0, Some(user.owner.clone()), Some(Action::Mint));
+            } else {
+                let token = token::Client::new(e, &config.xtar_token.clone());
+                let burnable_amount =
+                    (config.burnable_percentage as i128 * card_metadata.price_xtar) / 100;
+                let haw_ai_amount = card_metadata.price_xtar - burnable_amount;
+                token.burn(&to.clone(), &burnable_amount);
+                
+                // Transfer XTAR to contract instead of external address
+                token.transfer(&to.clone(), &e.current_contract_address(), &haw_ai_amount);
+                
+                // Store XTAR in contract vault
+                update_contract_vault(e, |_, vault| {
+                    vault.haw_ai_pot_xtar += haw_ai_amount;
+                });
+                
+                balance.haw_ai_xtar += haw_ai_amount;
+                crate::pot::management::accumulate_pot_internal(e, 0, 0, haw_ai_amount, Some(user.owner.clone()), Some(Action::Mint));
+            };
+        });
 
         // Emit mint event
         emit_mint(&env, &to);
@@ -342,17 +349,8 @@ impl NFT {
         let nft: Card = read_nft(&env, from.clone(), token_id.clone()).unwrap();
         // Prevent transferring cards locked by an action
         assert!(nft.locked_by_action == Action::None, "Card is locked by an action");
-        // Update owner-owned card indexes
-        let mut from_cards = read_owner_card(&env, from.clone());
-        if let Some(pos) = from_cards.iter().position(|x| x == token_id.clone()) {
-            from_cards.remove(pos.try_into().unwrap());
-            write_owner_card(&env, from.clone(), from_cards);
-        }
-        remove_nft(&env, from.clone(), token_id.clone());
-        write_nft(&env, to.clone(), token_id.clone(), nft);
-        let mut to_cards = read_owner_card(&env, to.clone());
-        to_cards.push_back(token_id);
-        write_owner_card(&env, to.clone(), to_cards);
+        // Move NFT and update owner indexes atomically
+        Self::move_nft(&env, from.clone(), to.clone(), token_id, nft);
 
         // Emit transfer event
         emit_transfer(&env, &from, &to);
@@ -388,6 +386,12 @@ impl NFT {
         let admin = read_administrator(&e);
         admin.require_auth();
         admin
+    }
+
+    pub fn maintenance(e: Env) {
+        // Anyone can call this to keep the contract alive
+        bump_instance(&e);
+        crate::admin::touch_globals(&e);
     }
 
     pub fn add_level(e: &Env, level: Level) -> u32 {
@@ -505,18 +509,21 @@ impl NFT {
     }
 
     pub fn add_power_to_card(env: &Env, player: Address, token_id: u32, amount: u32) {
-        let card = read_nft(env, player.clone(), TokenId(token_id)).unwrap();
         bump_instance(env);
-        // Cap power to metadata max
-        let metadata = crate::metadata::read_metadata(env, token_id);
-        let new_power = (card.power as u128 + amount as u128)
-            .min(metadata.max_power as u128) as u32;
-        let new_card = Card { power: new_power, locked_by_action: card.locked_by_action };
-        write_nft(env, player.clone(), TokenId(token_id), new_card);
-        let mut user = read_user(env, player.clone());
-        assert!(user.power >= amount, "Insufficient user POWER");
-        user.power = user.power.checked_sub(amount).expect("POWER underflow");
-        write_user(env, player.clone(), user);
+        
+        // Single writer update
+        update_nft(env, player.clone(), TokenId(token_id), |e, card| {
+            // Cap power to metadata max
+            let metadata = crate::metadata::read_metadata(e, token_id);
+            let new_power = (card.power as u128 + amount as u128)
+                .min(metadata.max_power as u128) as u32;
+            card.power = new_power;
+        });
+
+        update_user(env, player.clone(), |_, user| {
+            assert!(user.power >= amount, "Insufficient user POWER");
+            user.power = user.power.checked_sub(amount).expect("POWER underflow");
+        });
     }
 
     pub fn read_user(env: &Env, player: Address) -> User {
@@ -646,34 +653,32 @@ impl NFT {
             token_client.transfer(&funding_source, &env.current_contract_address(), &xtar);
         }
 
-        let mut pot_balance = read_pot_balance(&env);
-        let mut vault = read_contract_vault(&env);
-
         let fee_percentage = config.dogstar_fee_percentage;
         let terry_fee = (terry * fee_percentage as i128) / 10000;
         let power_fee = (power * fee_percentage) / 10000;
         let xtar_fee = (xtar * fee_percentage as i128) / 10000;
         
         // Accumulate in pot balance (minus dogstar fees)
-        pot_balance.accumulated_terry += terry - terry_fee;
-        pot_balance.accumulated_power += power - power_fee;
-        pot_balance.accumulated_xtar += xtar - xtar_fee;
-        pot_balance.last_updated = env.ledger().timestamp();
+        update_pot_balance(&env, |_, pot_balance| {
+            pot_balance.accumulated_terry += terry - terry_fee;
+            pot_balance.accumulated_power += power - power_fee;
+            pot_balance.accumulated_xtar += xtar - xtar_fee;
+            pot_balance.last_updated = env.ledger().timestamp();
+        });
         
         // Store dogstar fees in vault instead of separate balance
-        vault.dogstar_terry += terry_fee;
-        vault.dogstar_power += power_fee;
-        vault.dogstar_xtar += xtar_fee;
-        
-        write_pot_balance(&env, &pot_balance);
-        write_contract_vault(&env, &vault);
+        update_contract_vault(&env, |_, vault| {
+            vault.dogstar_terry += terry_fee;
+            vault.dogstar_power += power_fee;
+            vault.dogstar_xtar += xtar_fee;
+        });
         
         // Keep old balance for backward compatibility (can be removed later)
-        let mut dogstar_balance = read_dogstar_balance(&env);
-        dogstar_balance.terry += terry_fee;
-        dogstar_balance.power += power_fee;
-        dogstar_balance.xtar += xtar_fee;
-        write_dogstar_balance(&env, &dogstar_balance);
+        update_dogstar_balance(&env, |_, dogstar_balance| {
+            dogstar_balance.terry += terry_fee;
+            dogstar_balance.power += power_fee;
+            dogstar_balance.xtar += xtar_fee;
+        });
         
         if terry_fee > 0 || power_fee > 0 || xtar_fee > 0 {
             emit_dogstar_fee_accumulated(&env, terry_fee, power_fee, xtar_fee, fee_percentage, from, action);
@@ -707,38 +712,16 @@ impl NFT {
         
         // Transfer assets to claimer
         if terry_to_claim > 0 {
-            if !env.storage().persistent().has(&DataKey::User(claimer.clone())) {
-                // Auto-create user for admin if it doesn't exist to prevent panic
-                let user_val = User {
-                    owner: claimer.clone(),
-                    power: 0,
-                    terry: 0,
-                    total_history_terry: 0,
-                    level: 1,
-                };
-                write_user(&env, claimer.clone(), user_val);
-            }
-            let mut user = read_user(&env, claimer.clone());
-            user.terry += terry_to_claim;
-            write_user(&env, claimer.clone(), user);
+            update_user(&env, claimer.clone(), |_, user| {
+                user.terry += terry_to_claim;
+            });
             vault.dogstar_terry = 0;
         }
         
         if power_to_claim > 0 {
-            if !env.storage().persistent().has(&DataKey::User(claimer.clone())) {
-                 // Auto-create user for admin if it doesn't exist
-                 let user_val = User {
-                    owner: claimer.clone(),
-                    power: 0,
-                    terry: 0,
-                    total_history_terry: 0,
-                    level: 1,
-                };
-                write_user(&env, claimer.clone(), user_val);
-            }
-            let mut user = read_user(&env, claimer.clone());
-            user.power += power_to_claim;
-            write_user(&env, claimer.clone(), user);
+            update_user(&env, claimer.clone(), |_, user| {
+                user.power += power_to_claim;
+            });
             vault.dogstar_power = 0;
         }
         
@@ -754,12 +737,34 @@ impl NFT {
             if fee > 0 {
                 let client = token::Client::new(&env, &token);
                 client.transfer(&env.current_contract_address(), &claimer, &fee);
-                write_dogstar_generic_fee(&env, &token, 0);
+                update_dogstar_generic_fee(&env, &token, |_, current_fee| {
+                    *current_fee = 0;
+                });
             }
         }
 
         // Write updated vault
-        write_contract_vault(&env, &vault);
+        update_contract_vault(&env, |_, v| {
+            // Re-read to ensure no race condition, although we are in single thread execution conceptually
+            // In the helper, we get &mut ContractVault.
+            // We need to apply the changes we calculated based on the read snapshot `vault` at the beginning.
+            // BUT wait, `vault` was read at the top. If I use `update_contract_vault` now, I should re-apply the diffs.
+            // Or better, just move the whole logic inside `update_contract_vault`.
+            // However, that involves many side effects (transfers).
+            // Since this is `claim_dogstar_fees`, and only Admin can call it, and we are not in parallel execution in Soroban (yet?), 
+            // but for "Lost Update" protection, we should use the helper.
+            // The issue is the side effects (transfers) happening based on the values.
+            
+            // Correct pattern:
+            // 1. Read vault (already done).
+            // 2. Determine what to claim.
+            // 3. Perform transfers.
+            // 4. Update vault using helper, zeroing out what was claimed.
+            
+            if terry_to_claim > 0 { v.dogstar_terry = 0; }
+            if power_to_claim > 0 { v.dogstar_power = 0; }
+            if xtar_to_claim > 0 { v.dogstar_xtar = 0; }
+        });
         
         emit_dogstar_fee_withdrawn(&env, &claimer, terry_to_claim, power_to_claim, xtar_to_claim);
     }
@@ -783,16 +788,16 @@ impl NFT {
             return Err(NFTError::RoundAlreadyProcessed);
         }
         let balance = read_pot_balance(&env);
-        let mut vault = read_contract_vault(&env);
         
         // Move pot balance to vault for distribution
-        vault.haw_ai_pot_terry += balance.accumulated_terry;
-        vault.haw_ai_pot_power += balance.accumulated_power;
-        vault.haw_ai_pot_xtar += balance.accumulated_xtar;
-        vault.total_claimable_terry += balance.accumulated_terry;
-        vault.total_claimable_power += balance.accumulated_power;
-        vault.total_claimable_xtar += balance.accumulated_xtar;
-        write_contract_vault(&env, &vault);
+        update_contract_vault(&env, |_, vault| {
+            vault.haw_ai_pot_terry += balance.accumulated_terry;
+            vault.haw_ai_pot_power += balance.accumulated_power;
+            vault.haw_ai_pot_xtar += balance.accumulated_xtar;
+            vault.total_claimable_terry += balance.accumulated_terry;
+            vault.total_claimable_power += balance.accumulated_power;
+            vault.total_claimable_xtar += balance.accumulated_xtar;
+        });
         
         // Snapshot generic SAC tokens
         let registered = read_registered_tokens(&env);
@@ -801,7 +806,11 @@ impl NFT {
             let amt = read_accumulated_by_token(&env, &token_addr);
             if amt > 0 { generic_tokens.push_back(crate::storage_types::GenericTokenAmount { token: token_addr.clone(), amount: amt }); }
             // reset accumulated for next cycle
-            if amt != 0 { write_accumulated_by_token(&env, &token_addr, 0); }
+            if amt != 0 { 
+                update_accumulated_by_token(&env, &token_addr, |_, current| {
+                    *current = 0;
+                });
+            }
         }
 
         let snapshot = PotSnapshot {
@@ -822,17 +831,15 @@ impl NFT {
         
         set_current_round(&env, round);
         add_round(&env, round);
-        write_pot_balance(
-            &env,
-            &PotBalance {
-                accumulated_terry: 0,
-                accumulated_power: 0,
-                accumulated_xtar: 0,
-                last_opening_round: round,
-                total_openings: balance.total_openings + 1,
-                last_updated: env.ledger().timestamp(),
-            },
-        );
+        
+        update_pot_balance(&env, |e, pot| {
+            pot.accumulated_terry = 0;
+            pot.accumulated_power = 0;
+            pot.accumulated_xtar = 0;
+            pot.last_opening_round = round;
+            pot.total_openings = balance.total_openings + 1;
+            pot.last_updated = e.ledger().timestamp();
+        });
 
         Ok(())
     }
@@ -853,19 +860,20 @@ impl NFT {
                 let xtar_share = (snapshot.total_xtar * share_percentage as i128) / 10000;
                 
                 // Update user's claimable balance
-                let mut user_claimable = read_user_claimable_balance(env, &deck.owner);
-                user_claimable.terry += terry_share;
-                user_claimable.power += power_share;
-                user_claimable.xtar += xtar_share;
-                user_claimable.last_claim_round = round;
-                write_user_claimable_balance(env, &deck.owner, &user_claimable);
+                update_user_claimable_balance(env, &deck.owner, |_, user_claimable| {
+                    user_claimable.terry += terry_share;
+                    user_claimable.power += power_share;
+                    user_claimable.xtar += xtar_share;
+                    user_claimable.last_claim_round = round;
+                });
 
                 // Add generic SAC token claimables from snapshot
                 for gta in snapshot.generic_tokens.iter() {
                     let token_share = (gta.amount * share_percentage as i128) / 10000;
                     if token_share > 0 {
-                        let current = read_user_generic_claimable(env, &deck.owner, &gta.token);
-                        write_user_generic_claimable(env, &deck.owner, &gta.token, current + token_share);
+                        update_user_generic_claimable(env, &deck.owner, &gta.token, |_, current| {
+                            *current += token_share;
+                        });
                     }
                 }
             }
@@ -896,32 +904,33 @@ impl NFT {
         // Transfer assets to player
         if terry_to_claim > 0 {
             mint_terry(&env, player.clone(), terry_to_claim);
-            claimable.terry = 0;
         }
         
         if power_to_claim > 0 {
-            let mut user = read_user(&env, player.clone());
-            user.power += power_to_claim;
-            write_user(&env, player.clone(), user);
-            claimable.power = 0;
+            update_user(&env, player.clone(), |_, user| {
+                user.power += power_to_claim;
+            });
         }
         
         if xtar_to_claim > 0 {
             let token = token::Client::new(&env, &config.xtar_token);
             token.transfer(&env.current_contract_address(), &player, &xtar_to_claim);
-            claimable.xtar = 0;
         }
         
         // Update claim record
-        claimable.last_claim_timestamp = env.ledger().timestamp();
-        write_user_claimable_balance(&env, &player, &claimable);
+        update_user_claimable_balance(&env, &player, |e, claimable_rec| {
+             claimable_rec.terry = 0;
+             claimable_rec.power = 0;
+             claimable_rec.xtar = 0;
+             claimable_rec.last_claim_timestamp = e.ledger().timestamp();
+        });
         
         // Update vault to reflect claimed amounts
-        let mut vault = read_contract_vault(&env);
-        vault.total_claimable_terry -= terry_to_claim;
-        vault.total_claimable_power -= power_to_claim;
-        vault.total_claimable_xtar -= xtar_to_claim;
-        write_contract_vault(&env, &vault);
+        update_contract_vault(&env, |_, vault| {
+            vault.total_claimable_terry -= terry_to_claim;
+            vault.total_claimable_power -= power_to_claim;
+            vault.total_claimable_xtar -= xtar_to_claim;
+        });
         
         // Emit event
         emit_rewards_claimed(&env, &player, terry_to_claim, power_to_claim, xtar_to_claim);
@@ -933,7 +942,9 @@ impl NFT {
             if to_claim > 0 {
                 let client = token::Client::new(&env, &token);
                 client.transfer(&env.current_contract_address(), &player, &to_claim);
-                write_user_generic_claimable(&env, &player, &token, 0);
+                update_user_generic_claimable(&env, &player, &token, |_, current| {
+                    *current = 0;
+                });
             }
         }
 
@@ -963,10 +974,10 @@ impl NFT {
         const MAX_FEE_PERCENTAGE: u32 = 5000;
         assert!(fee_percentage <= MAX_FEE_PERCENTAGE, "Fee percentage exceeds maximum (50%)");
 
-        let mut config = read_config(&env);
-        let old_fee = config.dogstar_fee_percentage;
-        config.dogstar_fee_percentage = fee_percentage;
-        write_config(&env, &config);
+        let old_fee = read_config(&env).dogstar_fee_percentage;
+        update_config(&env, |_, config| {
+            config.dogstar_fee_percentage = fee_percentage;
+        });
         emit_dogstar_fee_percentage_updated(&env, old_fee, fee_percentage);
     }
 

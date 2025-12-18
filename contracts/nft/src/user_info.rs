@@ -9,14 +9,9 @@ pub fn add_card_to_owner(env: &Env, token_id: TokenId, user: Address) -> Result<
     log!(&env, "Add card to owner function");
     if let Some(card) = read_nft(&env, user.clone(), token_id.clone()) {
         log!(&env, "add_card_to_owner >> Found card {}", card.clone());
-        let mut user_card_ids = read_owner_card(&env, user.clone());
-        log!(
-            &env,
-            "add_card_to_owner >> User card ids {}",
-            user_card_ids.clone()
-        );
-        user_card_ids.push_back(token_id.clone());
-        write_owner_card(&env, user.clone(), user_card_ids);
+        update_owner_cards(env, user.clone(), |_, cards| {
+             cards.push_back(token_id.clone());
+        });
         Ok(())
     } else {
         log!(
@@ -50,7 +45,12 @@ pub fn read_user(e: &Env, user: Address) -> User {
     }
 }
 
-pub fn write_user(e: &Env, user: Address, user_info: User) {
+pub(crate) fn write_user(e: &Env, user: Address, mut user_info: User) {
+    // GUARDRAIL: Always recalculate level based on total_history_terry before writing.
+    // This ensures consistency even if the caller modified terry but forgot to update level,
+    // or if the caller read stale level data.
+    user_info.level = calculate_level_from_balance(e, user_info.total_history_terry);
+
     let key = DataKey::User(user);
     e.storage().persistent().set(&key, &user_info);
     e.storage().persistent().extend_ttl(
@@ -60,46 +60,68 @@ pub fn write_user(e: &Env, user: Address, user_info: User) {
     );
 }
 
+// GUARDRAIL A: Single-writer pattern helper
+pub fn update_user<F>(e: &Env, owner: Address, f: F)
+where
+    F: FnOnce(&Env, &mut User),
+{
+    let mut user = read_user(e, owner.clone());
+    f(e, &mut user);
+    write_user(e, owner, user);
+}
+
 pub fn get_user_level(e: &Env, user: Address) -> u32 {
     let user = read_user(&e, user.clone());
     let balance = user.total_history_terry;
     log!(&e, "get_user_level >> User balance {}", balance);
 
-    // Fetch the last level ID from storage
-    let last_level_id = if e.storage().persistent().has(&DataKey::LevelId) {
-        e.storage().persistent().extend_ttl(
-            &DataKey::LevelId,
-            STORAGE_THRESHOLD_LEDGERS,
-            STORAGE_BUMP_LEDGERS,
-        );
-        e.storage()
-            .persistent()
-            .get(&DataKey::LevelId)
-            .unwrap()
-    } else {
-        0u32
-    };
+    calculate_level_from_balance(e, balance)
+}
+
+fn calculate_level_from_balance(e: &Env, balance: i128) -> u32 {
+    // Fetch the last level ID from storage - Using direct get to enable auto-restore
+    let key_level_id = DataKey::LevelId;
+    
+    let last_level_id = e
+        .storage()
+        .persistent()
+        .get::<_, u32>(&key_level_id)
+        .expect("Level configuration missing: LevelId not found");
+        
+    e.storage().persistent().extend_ttl(
+        &key_level_id,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
+
+    let mut best_fit_level = 1;
 
     for i in 1..=last_level_id {
         let key = DataKey::Level(i);
-        if e.storage().persistent().has(&key) {
-            e.storage().persistent().extend_ttl(
-                &key,
-                STORAGE_THRESHOLD_LEDGERS,
-                STORAGE_BUMP_LEDGERS,
-            );
-        }
-        let level: Level = e.storage().persistent().get(&key).unwrap();
-        if balance > level.minimum_terry && balance <= level.maximum_terry {
-            return i;
+        
+        let level: Level = e.storage().persistent().get(&key)
+            .expect("Level configuration corrupted: Missing level data");
+            
+        // Direct get for auto-restore
+        e.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        
+        if balance >= level.minimum_terry {
+            best_fit_level = i;
+            if balance <= level.maximum_terry {
+                return i;
+            }
         }
     }
 
-    // Default level if no matching level is found
-    1
+    // Return the highest level found if balance exceeds all maximums
+    best_fit_level
 }
 
-pub fn write_owner_card(env: &Env, owner: Address, token_ids: Vec<TokenId>) {
+fn write_owner_card(env: &Env, owner: Address, token_ids: Vec<TokenId>) {
     log!(
         &env,
         "write_owner_card >> Write owner card for {}, token_ids {}",
@@ -115,6 +137,16 @@ pub fn write_owner_card(env: &Env, owner: Address, token_ids: Vec<TokenId>) {
     );
 }
 
+// GUARDRAIL C: Single-writer pattern helper for owner cards
+pub fn update_owner_cards<F>(e: &Env, owner: Address, f: F)
+where
+    F: FnOnce(&Env, &mut Vec<TokenId>),
+{
+    let mut cards = read_owner_card(e, owner.clone());
+    f(e, &mut cards);
+    write_owner_card(e, owner, cards);
+}
+
 pub fn read_owner_card(env: &Env, owner: Address) -> Vec<TokenId> {
     log!(
         &env,
@@ -123,44 +155,32 @@ pub fn read_owner_card(env: &Env, owner: Address) -> Vec<TokenId> {
     );
     let key = DataKey::OwnerOwnedCardIds(owner.clone());
 
-    if !env.storage().persistent().has(&key) {
-        log!(&env, "Not found cards for owner {}", owner.clone());
-        let empty_vec: Vec<TokenId> = Vec::new(&env);
-        env.storage().persistent().set(&key, &empty_vec);
+    if let Some(card_list) = env.storage().persistent().get(&key) {
         env.storage().persistent().extend_ttl(
             &key,
             STORAGE_THRESHOLD_LEDGERS,
             STORAGE_BUMP_LEDGERS,
         );
+        card_list
     } else {
-        env.storage().persistent().extend_ttl(
-            &key,
-            STORAGE_THRESHOLD_LEDGERS,
-            STORAGE_BUMP_LEDGERS,
-        );
+        log!(&env, "Not found cards for owner {}", owner.clone());
+        // Lazy initialization: just return empty, don't write. 
+        // Writing will happen when cards are added.
+        Vec::new(&env)
     }
-
-    let card_list: Vec<TokenId> = env
-        .storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or_else(|| Vec::new(&env));
-
-    return card_list;
 }
 
 pub fn mint_terry(e: &Env, owner: Address, amount: i128) {
-    let mut user = read_user(e, owner.clone());
-    user.terry += amount;
-    user.total_history_terry += amount;
-    user.level = get_user_level(e, owner.clone());
-    write_user(e, user.owner.clone(), user);
+    update_user(e, owner, |_, user| {
+        user.terry += amount;
+        user.total_history_terry += amount;
+    });
 }
 
 pub fn burn_terry(e: &Env, owner: Address, amount: i128) {
-    let mut user = read_user(e, owner.clone());
-    assert!(user.terry >= amount, "Not enough terry to burn");
-    user.terry -= amount;
-    write_user(e, user.owner.clone(), user);
+    update_user(e, owner, |_, user| {
+        assert!(user.terry >= amount, "Not enough terry to burn");
+        user.terry -= amount;
+    });
     log!(&e, "burn_terry >> Burned terry {}", amount);
 }

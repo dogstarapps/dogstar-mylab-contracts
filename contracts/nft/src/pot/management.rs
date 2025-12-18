@@ -4,7 +4,7 @@ use crate::storage_types::{
     DataKey, Deck, DogstarBalance, PendingReward, PlayerReward, PotBalance,
     PotSnapshot, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS,
 };
-use crate::admin::{read_config, read_contract_vault, write_contract_vault};
+use crate::admin::{read_config, read_contract_vault, write_contract_vault, update_contract_vault};
 use crate::event::*;
 use crate::nft_info::{Action, Category, read_nft};
 use crate::metadata::read_metadata;
@@ -19,27 +19,26 @@ pub fn calculate_effective_power(base_power: u32, deck_bonus: u32) -> u32 {
 // Pot Balance Management
 pub fn read_pot_balance(env: &Env) -> PotBalance {
     let key = DataKey::PotBalance;
-    if env.storage().persistent().has(&key) {
+    if let Some(balance) = env.storage().persistent().get(&key) {
         env.storage().persistent().extend_ttl(
             &key,
             STORAGE_THRESHOLD_LEDGERS,
             STORAGE_BUMP_LEDGERS,
         );
-    }
-    env.storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or(PotBalance {
+        balance
+    } else {
+        PotBalance {
             accumulated_terry: 0,
             accumulated_power: 0,
             accumulated_xtar: 0,
             last_opening_round: 0,
             total_openings: 0,
             last_updated: env.ledger().timestamp(),
-        })
+        }
+    }
 }
 
-pub fn write_pot_balance(env: &Env, balance: &PotBalance) {
+pub(crate) fn write_pot_balance(env: &Env, balance: &PotBalance) {
     env.storage()
         .persistent()
         .set(&DataKey::PotBalance, balance);
@@ -50,26 +49,35 @@ pub fn write_pot_balance(env: &Env, balance: &PotBalance) {
     );
 }
 
+// GUARDRAIL: Single-writer pattern helper for PotBalance
+pub fn update_pot_balance<F>(e: &Env, f: F)
+where
+    F: FnOnce(&Env, &mut PotBalance),
+{
+    let mut balance = read_pot_balance(e);
+    f(e, &mut balance);
+    write_pot_balance(e, &balance);
+}
+
 pub fn read_dogstar_balance(env: &Env) -> DogstarBalance {
     let key = DataKey::DogstarBalance;
-    if env.storage().persistent().has(&key) {
+    if let Some(balance) = env.storage().persistent().get(&key) {
         env.storage().persistent().extend_ttl(
             &key,
             STORAGE_THRESHOLD_LEDGERS,
             STORAGE_BUMP_LEDGERS,
         );
-    }
-    env.storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or(DogstarBalance {
+        balance
+    } else {
+        DogstarBalance {
             terry: 0,
             power: 0,
             xtar: 0,
-        })
+        }
+    }
 }
 
-pub fn write_dogstar_balance(env: &Env, balance: &DogstarBalance) {
+pub(crate) fn write_dogstar_balance(env: &Env, balance: &DogstarBalance) {
     env.storage()
         .persistent()
         .set(&DataKey::DogstarBalance, balance);
@@ -80,11 +88,20 @@ pub fn write_dogstar_balance(env: &Env, balance: &DogstarBalance) {
     );
 }
 
+// GUARDRAIL: Single-writer pattern helper for DogstarBalance
+pub fn update_dogstar_balance<F>(e: &Env, f: F)
+where
+    F: FnOnce(&Env, &mut DogstarBalance),
+{
+    let mut balance = read_dogstar_balance(e);
+    f(e, &mut balance);
+    write_dogstar_balance(e, &balance);
+}
+
 // Internal helper to accumulate pot balances and dogstar fees without requiring admin auth.
 // This is intended to be called from trusted internal flows like mint/burn.
 pub fn accumulate_pot_internal(env: &Env, terry: i128, power: u32, xtar: i128, from: Option<Address>, action: Option<Action>) {
     let config = read_config(env);
-    let mut pot_balance = read_pot_balance(env);
 
     // Calculate fees in basis points
     let fee_percentage = config.dogstar_fee_percentage;
@@ -93,25 +110,26 @@ pub fn accumulate_pot_internal(env: &Env, terry: i128, power: u32, xtar: i128, f
     let xtar_fee = (xtar * fee_percentage as i128) / 10000;
 
     // Accumulate in pot balance (minus dogstar fees)
-    pot_balance.accumulated_terry += terry - terry_fee;
-    pot_balance.accumulated_power += power - power_fee;
-    pot_balance.accumulated_xtar += xtar - xtar_fee;
-    pot_balance.last_updated = env.ledger().timestamp();
-    write_pot_balance(env, &pot_balance);
+    update_pot_balance(env, |_, pot_balance| {
+        pot_balance.accumulated_terry += terry - terry_fee;
+        pot_balance.accumulated_power += power - power_fee;
+        pot_balance.accumulated_xtar += xtar - xtar_fee;
+        pot_balance.last_updated = env.ledger().timestamp();
+    });
 
     // Update contract vault with new fees
-    let mut vault = read_contract_vault(env);
-    vault.dogstar_terry += terry_fee;
-    vault.dogstar_power += power_fee;
-    vault.dogstar_xtar += xtar_fee;
-    write_contract_vault(env, &vault);
+    update_contract_vault(env, |_, vault| {
+        vault.dogstar_terry += terry_fee;
+        vault.dogstar_power += power_fee;
+        vault.dogstar_xtar += xtar_fee;
+    });
 
     // Update legacy dogstar balance for backward-compat events/UI
-    let mut dogstar_balance = read_dogstar_balance(env);
-    dogstar_balance.terry += terry_fee;
-    dogstar_balance.power += power_fee;
-    dogstar_balance.xtar += xtar_fee;
-    write_dogstar_balance(env, &dogstar_balance);
+    update_dogstar_balance(env, |_, dogstar_balance| {
+        dogstar_balance.terry += terry_fee;
+        dogstar_balance.power += power_fee;
+        dogstar_balance.xtar += xtar_fee;
+    });
 
     if terry_fee > 0 || power_fee > 0 || xtar_fee > 0 {
         emit_dogstar_fee_accumulated(env, terry_fee, power_fee, xtar_fee, fee_percentage, from, action);
@@ -120,20 +138,19 @@ pub fn accumulate_pot_internal(env: &Env, terry: i128, power: u32, xtar: i128, f
 
 pub fn read_dogstar_generic_fee(env: &Env, token: &Address) -> i128 {
     let key = DataKey::DogstarGenericFee(token.clone());
-    if env.storage().persistent().has(&key) {
+    if let Some(fee) = env.storage().persistent().get(&key) {
         env.storage().persistent().extend_ttl(
             &key,
             STORAGE_THRESHOLD_LEDGERS,
             STORAGE_BUMP_LEDGERS,
         );
+        fee
+    } else {
+        0
     }
-    env.storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or(0)
 }
 
-pub fn write_dogstar_generic_fee(env: &Env, token: &Address, amount: i128) {
+pub(crate) fn write_dogstar_generic_fee(env: &Env, token: &Address, amount: i128) {
     let key = DataKey::DogstarGenericFee(token.clone());
     env.storage().persistent().set(&key, &amount);
     env.storage().persistent().extend_ttl(
@@ -143,8 +160,18 @@ pub fn write_dogstar_generic_fee(env: &Env, token: &Address, amount: i128) {
     );
 }
 
+// GUARDRAIL: Single-writer pattern helper for DogstarGenericFee
+pub fn update_dogstar_generic_fee<F>(e: &Env, token: &Address, f: F)
+where
+    F: FnOnce(&Env, &mut i128),
+{
+    let mut fee = read_dogstar_generic_fee(e, token);
+    f(e, &mut fee);
+    write_dogstar_generic_fee(e, token, fee);
+}
+
 // Snapshot Management
-pub fn write_pot_snapshot(env: &Env, round: u32, snapshot: &PotSnapshot) {
+pub(crate) fn write_pot_snapshot(env: &Env, round: u32, snapshot: &PotSnapshot) {
     let key = DataKey::OpeningSnapshot(round);
 
     env.storage().persistent().set(&key, snapshot);
@@ -158,20 +185,29 @@ pub fn write_pot_snapshot(env: &Env, round: u32, snapshot: &PotSnapshot) {
 // Multi‑asset helpers
 pub fn read_registered_tokens(env: &Env) -> Vec<Address> {
     let key = DataKey::RegisteredTokens;
-    if env.storage().persistent().has(&key) {
+    if let Some(tokens) = env.storage().persistent().get(&key) {
         env.storage().persistent().extend_ttl(
             &key,
             STORAGE_THRESHOLD_LEDGERS,
             STORAGE_BUMP_LEDGERS,
         );
+        tokens
+    } else {
+        Vec::new(env)
     }
-    env.storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or_else(|| Vec::new(env))
 }
 
-pub fn write_registered_tokens(env: &Env, tokens: &Vec<Address>) {
+// GUARDRAIL: Single-writer pattern helper for RegisteredTokens
+pub fn update_registered_tokens<F>(e: &Env, f: F)
+where
+    F: FnOnce(&Env, &mut Vec<Address>),
+{
+    let mut tokens = read_registered_tokens(e);
+    f(e, &mut tokens);
+    write_registered_tokens(e, &tokens);
+}
+
+pub(crate) fn write_registered_tokens(env: &Env, tokens: &Vec<Address>) {
     env.storage()
         .persistent()
         .set(&DataKey::RegisteredTokens, tokens);
@@ -184,20 +220,19 @@ pub fn write_registered_tokens(env: &Env, tokens: &Vec<Address>) {
 
 pub fn read_accumulated_by_token(env: &Env, token: &Address) -> i128 {
     let key = DataKey::AccumulatedByToken(token.clone());
-    if env.storage().persistent().has(&key) {
+    if let Some(amount) = env.storage().persistent().get(&key) {
         env.storage().persistent().extend_ttl(
             &key,
             STORAGE_THRESHOLD_LEDGERS,
             STORAGE_BUMP_LEDGERS,
         );
+        amount
+    } else {
+        0
     }
-    env.storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or(0)
 }
 
-pub fn write_accumulated_by_token(env: &Env, token: &Address, amount: i128) {
+pub(crate) fn write_accumulated_by_token(env: &Env, token: &Address, amount: i128) {
     let key = DataKey::AccumulatedByToken(token.clone());
     env.storage().persistent().set(&key, &amount);
     env.storage().persistent().extend_ttl(
@@ -207,22 +242,31 @@ pub fn write_accumulated_by_token(env: &Env, token: &Address, amount: i128) {
     );
 }
 
+// GUARDRAIL: Single-writer pattern helper for AccumulatedByToken
+pub fn update_accumulated_by_token<F>(e: &Env, token: &Address, f: F)
+where
+    F: FnOnce(&Env, &mut i128),
+{
+    let mut amount = read_accumulated_by_token(e, token);
+    f(e, &mut amount);
+    write_accumulated_by_token(e, token, amount);
+}
+
 pub fn read_user_generic_claimable(env: &Env, user: &Address, token: &Address) -> i128 {
     let key = DataKey::UserGenericClaimable(user.clone(), token.clone());
-    if env.storage().persistent().has(&key) {
+    if let Some(amount) = env.storage().persistent().get(&key) {
         env.storage().persistent().extend_ttl(
             &key,
             STORAGE_THRESHOLD_LEDGERS,
             STORAGE_BUMP_LEDGERS,
         );
+        amount
+    } else {
+        0
     }
-    env.storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or(0)
 }
 
-pub fn write_user_generic_claimable(env: &Env, user: &Address, token: &Address, amount: i128) {
+pub(crate) fn write_user_generic_claimable(env: &Env, user: &Address, token: &Address, amount: i128) {
     let key = DataKey::UserGenericClaimable(user.clone(), token.clone());
     env.storage().persistent().set(&key, &amount);
     env.storage().persistent().extend_ttl(
@@ -232,13 +276,31 @@ pub fn write_user_generic_claimable(env: &Env, user: &Address, token: &Address, 
     );
 }
 
-pub fn read_pot_snapshot(env: &Env, round: u32) -> Option<PotSnapshot> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::OpeningSnapshot(round))
+// GUARDRAIL: Single-writer pattern helper for UserGenericClaimable
+pub fn update_user_generic_claimable<F>(e: &Env, user: &Address, token: &Address, f: F)
+where
+    F: FnOnce(&Env, &mut i128),
+{
+    let mut amount = read_user_generic_claimable(e, user, token);
+    f(e, &mut amount);
+    write_user_generic_claimable(e, user, token, amount);
 }
 
-pub fn write_player_reward(env: &Env, round: u32, player: &Address, reward: &PlayerReward) {
+pub fn read_pot_snapshot(env: &Env, round: u32) -> Option<PotSnapshot> {
+    let key = DataKey::OpeningSnapshot(round);
+    if let Some(snapshot) = env.storage().persistent().get(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        Some(snapshot)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn write_player_reward(env: &Env, round: u32, player: &Address, reward: &PlayerReward) {
     let key = DataKey::PlayerShare(round, player.clone());
 
     env.storage().persistent().set(&key, reward);
@@ -250,12 +312,20 @@ pub fn write_player_reward(env: &Env, round: u32, player: &Address, reward: &Pla
 }
 
 pub fn read_player_reward(env: &Env, round: u32, player: &Address) -> Option<PlayerReward> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::PlayerShare(round, player.clone()))
+    let key = DataKey::PlayerShare(round, player.clone());
+    if let Some(reward) = env.storage().persistent().get(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        Some(reward)
+    } else {
+        None
+    }
 }
 
-pub fn write_pending_reward(env: &Env, round: u32, player: &Address, reward: &PendingReward) {
+pub(crate) fn write_pending_reward(env: &Env, round: u32, player: &Address, reward: &PendingReward) {
     let key = DataKey::PendingReward(round, player.clone());
     env.storage().persistent().set(&key, reward);
     env.storage().persistent().extend_ttl(
@@ -267,31 +337,30 @@ pub fn write_pending_reward(env: &Env, round: u32, player: &Address, reward: &Pe
 
 pub fn read_pending_reward(env: &Env, round: u32, player: &Address) -> Option<PendingReward> {
     let key = DataKey::PendingReward(round, player.clone());
-    if env.storage().persistent().has(&key) {
+    if let Some(reward) = env.storage().persistent().get(&key) {
         env.storage().persistent().extend_ttl(
             &key,
             STORAGE_THRESHOLD_LEDGERS,
             STORAGE_BUMP_LEDGERS,
         );
+        Some(reward)
+    } else {
+        None
     }
-    env.storage()
-        .persistent()
-        .get(&key)
 }
 
 pub fn get_current_round(env: &Env) -> u32 {
     let key = DataKey::CurrentRound;
-    if env.storage().persistent().has(&key) {
+    if let Some(round) = env.storage().persistent().get(&key) {
         env.storage().persistent().extend_ttl(
             &key,
             STORAGE_THRESHOLD_LEDGERS,
             STORAGE_BUMP_LEDGERS,
         );
+        round
+    } else {
+        0
     }
-    env.storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or(0)
 }
 
 pub fn set_current_round(env: &Env, round: u32) {
@@ -307,17 +376,16 @@ pub fn set_current_round(env: &Env, round: u32) {
 
 pub fn get_all_rounds(env: &Env) -> Vec<u32> {
     let key = DataKey::AllRounds;
-    if env.storage().persistent().has(&key) {
+    if let Some(rounds) = env.storage().persistent().get(&key) {
         env.storage().persistent().extend_ttl(
             &key,
             STORAGE_THRESHOLD_LEDGERS,
             STORAGE_BUMP_LEDGERS,
         );
+        rounds
+    } else {
+        Vec::new(env)
     }
-    env.storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or_else(|| Vec::new(env))
 }
 
 pub fn add_round(env: &Env, round: u32) {
@@ -335,19 +403,18 @@ pub fn add_round(env: &Env, round: u32) {
 pub fn get_eligible_players(env: &Env) -> Vec<Address> {
     let mut eligible_players = Vec::new(env);
     let key = DataKey::Decks;
-    // Extend TTL for the global decks list to ensure it stays alive during pot distribution
-    if env.storage().persistent().has(&key) {
+    
+    let decks = if let Some(decks) = env.storage().persistent().get::<DataKey, Vec<Deck>>(&key) {
+        // Extend TTL for the global decks list to ensure it stays alive during pot distribution
         env.storage().persistent().extend_ttl(
             &key,
             STORAGE_THRESHOLD_LEDGERS,
             STORAGE_BUMP_LEDGERS,
         );
-    }
-    let decks = env
-        .storage()
-        .persistent()
-        .get::<DataKey, Vec<Deck>>(&key)
-        .unwrap_or(Vec::new(env));
+        decks
+    } else {
+        Vec::new(env)
+    };
 
     for deck in decks.iter() {
         if deck.token_ids.len() == 4 {
