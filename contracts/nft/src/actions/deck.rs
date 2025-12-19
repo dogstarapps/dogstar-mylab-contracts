@@ -98,6 +98,16 @@ pub fn read_deck(env: Env, user: Address) -> Deck {
         }
         deck
     } else {
+        // Persist deck default so the key always exists (prevents MissingValue on new users)
+        env.storage().persistent().set(&key, &new_deck);
+        #[cfg(not(test))]
+        {
+            env.storage().persistent().extend_ttl(
+                &key,
+                STORAGE_THRESHOLD_LEDGERS,
+                STORAGE_BUMP_LEDGERS,
+            );
+        }
         new_deck
     }
 }

@@ -85,20 +85,19 @@ pub fn remove_stake(env: &Env, user: Address, category: Category, token_id: Toke
 
 pub fn read_stake(env: &Env, user: Address, category: Category, token_id: TokenId) -> Stake {
     let owner = read_user(&env, user).owner;
-    let key = DataKey::Stake(owner, category, token_id);
-    if let Some(stake) = env.storage().persistent().get(&key) {
-        #[cfg(not(test))]
-        {
-            env.storage().persistent().extend_ttl(
-                &key,
-                STORAGE_THRESHOLD_LEDGERS,
-                STORAGE_BUMP_LEDGERS,
-            );
-        }
-        stake
-    } else {
-        panic!("Stake not found");
+    let key = DataKey::Stake(owner.clone(), category.clone(), token_id.clone());
+    let stake: Stake = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .expect("Stake not found");
+    #[cfg(not(test))]
+    {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
     }
+    stake
 }
 
 pub fn stake(env: Env, user: Address, category: Category, token_id: TokenId, period_index: u32) {
@@ -188,7 +187,8 @@ pub fn increase_stake_power(
     assert!(nft_read.locked_by_action == Action::Stake, "Can't find staked");
     assert!(nft_read.power >= increase_power, "Insufficient NFT power");
 
-    let mut stake = read_stake(&env, owner.clone(), category.clone(), token_id.clone());
+    let mut stake = read_stake(&env, owner.clone(), category.clone(), token_id.clone())
+        ;
 
     // Safe addition to prevent overflow
     stake.power = stake
@@ -253,7 +253,8 @@ pub fn unstake(env: Env, user: Address, category: Category, token_id: TokenId) {
         .try_into()
         .expect("Timestamp exceeds u32 limit");
 
-    let stake = read_stake(&env, owner.clone(), category.clone(), token_id.clone());
+    let stake = read_stake(&env, owner.clone(), category.clone(), token_id.clone())
+        ;
     #[cfg(not(test))]
     {
         assert!(

@@ -164,9 +164,15 @@ pub fn read_owner_card(env: &Env, owner: Address) -> Vec<TokenId> {
         card_list
     } else {
         log!(&env, "Not found cards for owner {}", owner.clone());
-        // Lazy initialization: just return empty, don't write. 
-        // Writing will happen when cards are added.
-        Vec::new(&env)
+        // Persist empty list so the key exists for new users
+        let empty = Vec::new(&env);
+        env.storage().persistent().set(&key, &empty);
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        empty
     }
 }
 

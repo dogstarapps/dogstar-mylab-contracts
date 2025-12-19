@@ -87,14 +87,15 @@ pub fn read_fight(env: Env, user: Address, category: Category, token_id: TokenId
     let owner = read_user(&env, user).owner;
 
     let key = DataKey::Fight(owner.clone(), category.clone(), token_id.clone());
-    if let Some(fight) = env.storage().persistent().get(&key) {
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
-        fight
-    } else {
-        panic!("Fight not found");
-    }
+    let fight: Fight = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .expect("Fight not found");
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
+    fight
 }
 
 pub fn remove_fight(env: Env, user: Address, category: Category, token_id: TokenId) {
@@ -191,7 +192,7 @@ pub fn check_liquidation(
         user.clone(),
         category.clone(),
         token_id.clone(),
-    );
+     );
     let config = read_config(&env);
     let current_price = get_currency_price(
         env.clone(),
@@ -348,7 +349,7 @@ pub fn close_position(env: Env, user: Address, category: Category, token_id: Tok
         owner.clone(),
         category.clone(),
         token_id.clone(),
-    );
+     );
     log!(&env, "read fight = ", fight.clone());
     let config = read_config(&env);
 

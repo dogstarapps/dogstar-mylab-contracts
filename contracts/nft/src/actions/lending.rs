@@ -89,16 +89,15 @@ pub fn read_lending(env: Env, user: Address, category: Category, token_id: Token
     let owner = read_user(&env, user).owner;
 
     let key = DataKey::Lending(owner.clone(), category.clone(), token_id.clone());
-    if let Some(lending) = env.storage().persistent().get(&key) {
-        env.storage().persistent().extend_ttl(
-            &key,
-            STORAGE_THRESHOLD_LEDGERS,
-            STORAGE_BUMP_LEDGERS,
-        );
-        lending
-    } else {
-        panic!("Lending not found");
-    }
+    let lending: Lending = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .expect("Lending not found");
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
+    lending
 }
 
 pub fn remove_lending(env: Env, user: Address, category: Category, token_id: TokenId) {
@@ -174,16 +173,15 @@ pub fn read_borrowing(env: Env, user: Address, category: Category, token_id: Tok
     let owner = read_user(&env, user).owner;
 
     let key = DataKey::Borrowing(owner.clone(), category.clone(), token_id.clone());
-    if let Some(borrowing) = env.storage().persistent().get(&key) {
-        env.storage().persistent().extend_ttl(
-            &key,
-            STORAGE_THRESHOLD_LEDGERS,
-            STORAGE_BUMP_LEDGERS,
-        );
-        borrowing
-    } else {
-        panic!("Borrowing not found");
-    }
+    let borrowing: Borrowing = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .expect("Borrowing not found");
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
+    borrowing
 }
 
 pub fn remove_borrowing(env: Env, user: Address, category: Category, token_id: TokenId) {
