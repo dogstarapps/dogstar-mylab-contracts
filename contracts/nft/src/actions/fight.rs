@@ -298,6 +298,7 @@ pub fn open_position(
 
     // Store fight
     update_nft(&env, owner.clone(), token_id.clone(), |_, card| {
+        card.power = nft.power;
         card.locked_by_action = Action::Fight;
     });
     write_fight(
@@ -380,66 +381,36 @@ pub fn close_position(env: Env, user: Address, category: Category, token_id: Tok
 
     let card_metadata = crate::metadata::read_metadata(&env, token_id.0);
 
-    // Calculate trading result: staked fight power + P&L
-    let trading_result = fight.power as i128 + pnl_power;
-    log!(
-        &env,
-        "trading calculation: fight.power =",
-        fight.power,
-        "pnl_power =",
-        pnl_power,
-        "trading_result =",
-        trading_result
-    );
-
+    // Apply PnL to stake (partial losses reduce stake; cap at 0)
     let mut profit_to_haw_ai: i128 = 0;
+    let mut pnl_to_user = pnl_power;
+    if pnl_power > 0 {
+        profit_to_haw_ai = (pnl_power * config.haw_ai_percentage as i128) / 100;
+        pnl_to_user = pnl_power - profit_to_haw_ai;
+    }
 
-    let final_power = if trading_result < 0 {
-        // Loss: user loses all staked power
-        nft_read.power
-    } else {
-        // Profit: split between haw_ai and user
-        let profit = pnl_power; // Only the profit part, not including the original stake
+    let stake_after_pnl = (fight.power as i128 + pnl_to_user).max(0);
+    let final_power_i128 = nft_read.power as i128 + stake_after_pnl;
 
-        if profit > 0 {
-            // Split profit: haw_ai gets percentage, user gets the rest
-            profit_to_haw_ai = (profit * config.haw_ai_percentage as i128) / 100;
-            let profit_to_user = profit - profit_to_haw_ai;
+    if profit_to_haw_ai > 0 {
+        crate::pot::management::accumulate_pot_internal(
+            &env,
+            0,
+            profit_to_haw_ai as u32,
+            0,
+            Some(owner.clone()),
+            Some(Action::Fight),
+        );
+    }
 
-            log!(
-                &env,
-                "profit split: total_profit =",
-                profit,
-                "haw_ai =",
-                profit_to_haw_ai,
-                "user =",
-                profit_to_user
-            );
-
-            // Send haw_ai's share to pot
-            if profit_to_haw_ai > 0 {
-                crate::pot::management::accumulate_pot_internal(
-                    &env,
-                    0,
-                    profit_to_haw_ai as u32,
-                    0,
-                    Some(owner.clone()),
-                    Some(Action::Fight),
-                );
-            }
-
-            // Return user's profit + original stake
-            nft_read.power + fight.power + profit_to_user as u32
-        } else {
-            // No profit, just return original stake
-            nft_read.power + fight.power
-        }
-    };
+    let final_power = final_power_i128.min(card_metadata.max_power as i128).max(0) as u32;
 
     log!(
         &env,
         "power calculation: nft.power =",
         nft_read.power,
+        "stake_after_pnl =",
+        stake_after_pnl,
         "final_power =",
         final_power
     );

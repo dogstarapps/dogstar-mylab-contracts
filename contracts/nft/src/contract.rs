@@ -457,6 +457,108 @@ impl NFT {
         read_config(&env)
     }
 
+    // --- Admin config setters ---
+    pub fn set_power_action_fee(e: Env, fee: u32) {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+        update_config(&e, |_, cfg| {
+            cfg.power_action_fee = fee;
+        });
+    }
+
+    pub fn set_stake_params(
+        e: Env,
+        stake_periods: Vec<u32>,
+        stake_interest_percentages: Vec<u32>,
+    ) {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+        assert!(
+            stake_periods.len() > 0 && stake_periods.len() == stake_interest_percentages.len(),
+            "invalid stake params"
+        );
+        update_config(&e, |_, cfg| {
+            cfg.stake_periods = stake_periods.clone();
+            cfg.stake_interest_percentages = stake_interest_percentages.clone();
+        });
+    }
+
+    pub fn set_apy_alpha(e: Env, apy_alpha: u32) {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+        update_config(&e, |_, cfg| {
+            cfg.apy_alpha = apy_alpha;
+        });
+    }
+
+    pub fn set_power_to_usdc_rate(e: Env, rate: i128) {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+        update_config(&e, |_, cfg| {
+            cfg.power_to_usdc_rate = rate;
+        });
+    }
+
+    pub fn set_fee_percentages(
+        e: Env,
+        withdrawable_percentage: u32,
+        burnable_percentage: u32,
+        burn_receive_percentage: u32,
+        haw_ai_percentage: u32,
+        dogstar_fee_percentage: u32,
+    ) {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+        assert!(
+            withdrawable_percentage <= 100
+                && burnable_percentage <= 100
+                && burn_receive_percentage <= 100
+                && haw_ai_percentage <= 100,
+            "invalid percentages"
+        );
+        assert!(dogstar_fee_percentage <= 10_000, "invalid dogstar fee");
+        update_config(&e, |_, cfg| {
+            cfg.withdrawable_percentage = withdrawable_percentage;
+            cfg.burnable_percentage = burnable_percentage;
+            cfg.burn_receive_percentage = burn_receive_percentage;
+            cfg.haw_ai_percentage = haw_ai_percentage;
+            cfg.dogstar_fee_percentage = dogstar_fee_percentage;
+        });
+    }
+
+    pub fn set_rewards(
+        e: Env,
+        terry_per_power: i128,
+        terry_per_deck: i128,
+        terry_per_fight: i128,
+        terry_per_lending: i128,
+        terry_per_stake: i128,
+    ) {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+        assert!(
+            terry_per_power >= 0
+                && terry_per_deck >= 0
+                && terry_per_fight >= 0
+                && terry_per_lending >= 0
+                && terry_per_stake >= 0,
+            "negative rewards not allowed"
+        );
+        update_config(&e, |_, cfg| {
+            cfg.terry_per_power = terry_per_power;
+            cfg.terry_per_deck = terry_per_deck;
+            cfg.terry_per_fight = terry_per_fight;
+            cfg.terry_per_lending = terry_per_lending;
+            cfg.terry_per_stake = terry_per_stake;
+        });
+    }
+
     pub fn create_metadata(e: &Env, card: CardMetadata, id: u32) {
         let admin = read_administrator(&e);
         admin.require_auth();

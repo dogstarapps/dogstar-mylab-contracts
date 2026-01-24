@@ -496,9 +496,9 @@ pub fn borrow_quote(
     let owner = read_user(&env, user).owner;
     let config = read_config(&env);
     let fee = power.saturating_mul(config.power_action_fee) / 100;
-    let borrow_net: u32 = power.saturating_sub(fee);
+    let borrow_net_req: u32 = power.saturating_sub(fee);
 
-    if power == 0 || borrow_net == 0 {
+    if power == 0 || borrow_net_req == 0 {
         return BorrowQuote {
             allowed: false,
             reason: 1,
@@ -506,7 +506,7 @@ pub fn borrow_quote(
             fee,
             reserve: 0,
             buffer: 0,
-            borrow_net,
+            borrow_net: borrow_net_req,
             max_suggested_gross: 0,
         };
     }
@@ -514,7 +514,9 @@ pub fn borrow_quote(
     let nft = read_nft(&env, owner.clone(), token_id.clone()).unwrap();
     let st = read_state(&env);
 
-    if st.total_offer < borrow_net as u64 {
+    // Cap by available liquidity to avoid blocking when partial liquidity exists
+    let borrow_net_cap = st.total_offer.min(borrow_net_req as u64) as u32;
+    if borrow_net_cap == 0 {
         return BorrowQuote {
             allowed: false,
             reason: 2,
@@ -522,13 +524,13 @@ pub fn borrow_quote(
             fee,
             reserve: 0,
             buffer: 0,
-            borrow_net,
+            borrow_net: borrow_net_req,
             max_suggested_gross: 0,
         };
     }
 
-    let offer_after = st.total_offer.saturating_sub(borrow_net as u64);
-    let borrowed_after = st.total_borrowed_power.saturating_add(borrow_net as u64);
+    let offer_after = st.total_offer.saturating_sub(borrow_net_cap as u64);
+    let borrowed_after = st.total_borrowed_power.saturating_add(borrow_net_cap as u64);
     let active_loans_after = st.active_loans.saturating_add(1);
 
     let apy = calculate_apy(
@@ -548,17 +550,17 @@ pub fn borrow_quote(
             fee,
             reserve: 0,
             buffer: 0,
-            borrow_net,
+            borrow_net: borrow_net_cap,
             max_suggested_gross: 0,
         };
     }
 
-    let reserve =
-        ((borrow_net as u128).saturating_mul(k_fp)) / ((SCALE as u128).saturating_sub(k_fp));
+    let reserve = ((borrow_net_cap as u128).saturating_mul(k_fp))
+        / ((SCALE as u128).saturating_sub(k_fp));
     let buffer_bps: u32 = 500; // 5%
     let collateral_net = (nft.power as u128).saturating_sub(fee as u128);
     let buffer = (collateral_net.saturating_mul(buffer_bps as u128)) / 10_000u128;
-    let lhs = (borrow_net as u128)
+    let lhs = (borrow_net_cap as u128)
         .saturating_add(reserve)
         .saturating_add(fee as u128)
         .saturating_add(buffer);
@@ -579,13 +581,12 @@ pub fn borrow_quote(
             fee,
             reserve: reserve as u64,
             buffer: buffer as u64,
-            borrow_net,
+            borrow_net: borrow_net_cap,
             max_suggested_gross: gross_suggested as u32,
         };
     }
 
     // Also cap by liquidity (net)
-    let borrow_net_cap = st.total_offer.min(borrow_net as u64) as u32;
     let gross_cap = ((borrow_net_cap as u128) * 100u128)
         / ((100u128).saturating_sub(config.power_action_fee as u128));
 
@@ -596,7 +597,7 @@ pub fn borrow_quote(
         fee,
         reserve: reserve as u64,
         buffer: buffer as u64,
-        borrow_net,
+        borrow_net: borrow_net_cap,
         max_suggested_gross: gross_cap as u32,
     }
 }
@@ -907,18 +908,16 @@ pub fn withdraw(env: Env, user: Address, category: Category, token_id: TokenId) 
         state.total_offer -= lending.power as u64;
     });
 
-    // Return principal_net to the same card and unlock
-    update_nft(&env, owner.clone(), token_id.clone(), |_, card| {
-        card.power = card.power.saturating_add(lending.power);
-        card.locked_by_action = Action::None;
-    });
-
     let power_fee: u32 =
         (interest_amount.saturating_mul(config.power_action_fee as u64) / 100) as u32;
     let reward_interest: u64 = interest_amount.saturating_sub(power_fee as u64);
 
-    update_user(&env, owner.clone(), |_, user| {
-        user.power += reward_interest as u32;
+    // Return principal_net + intereses al NFT y desbloquear
+    update_nft(&env, owner.clone(), token_id.clone(), |_, card| {
+        card.power = card
+            .power
+            .saturating_add(lending.power.saturating_add(reward_interest as u32));
+        card.locked_by_action = Action::None;
     });
 
     // Emit withdraw event
