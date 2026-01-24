@@ -16,20 +16,12 @@ pub struct CardMetadata {
     pub price_terry: i128,
     pub token_id: u32,
 }
-
-/*
-pub fn write_metadata(e: &Env, token_id : u32,  metadata: CardMetadata)  {
-    let key  = DataKey::TokenId(token_id);
-    e.storage().instance().set(&key, &metadata);
-}
-*/
-
 pub fn read_metadata(e: &Env, token_id: u32) -> CardMetadata {
     let key = DataKey::TokenId(token_id);
     e.storage().instance().get(&key).unwrap()
 }
 
-pub fn write_metadata(e: &Env, token_id: u32, metadata: CardMetadata) {
+pub(crate) fn write_metadata(e: &Env, token_id: u32, metadata: CardMetadata) {
     let key = DataKey::TokenId(token_id);
     e.storage().instance().set(&key, &metadata);
     e.storage().instance().extend_ttl(
@@ -61,4 +53,15 @@ pub fn write_metadata(e: &Env, token_id: u32, metadata: CardMetadata) {
             STORAGE_BUMP_LEDGERS,
         );
     }
+}
+
+
+// GUARDRAIL: Single-writer helper for metadata
+pub fn update_metadata<F>(e: &Env, token_id: u32, f: F)
+where
+    F: FnOnce(&Env, &mut CardMetadata),
+{
+    let mut meta = read_metadata(e, token_id);
+    f(e, &mut meta);
+    write_metadata(e, token_id, meta);
 }
