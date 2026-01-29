@@ -10,7 +10,9 @@ pub fn add_card_to_owner(env: &Env, token_id: TokenId, user: Address) -> Result<
     if let Some(card) = read_nft(&env, user.clone(), token_id.clone()) {
         log!(&env, "add_card_to_owner >> Found card {}", card.clone());
         update_owner_cards(env, user.clone(), |_, cards| {
-             cards.push_back(token_id.clone());
+            if cards.iter().position(|id| id == token_id.clone()).is_none() {
+                cards.push_back(token_id.clone());
+            }
         });
         Ok(())
     } else {

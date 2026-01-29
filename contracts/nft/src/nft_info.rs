@@ -2,7 +2,7 @@ use soroban_sdk::{contracttype, log, Address, Env};
 
 use crate::storage_types::{DataKey, TokenId, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[contracttype]
 pub enum Category {
     Leader,

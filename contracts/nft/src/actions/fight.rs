@@ -1,8 +1,11 @@
 use crate::{nft_info::remove_nft, user_info::mint_terry, *};
-use admin::{read_balance, read_config, update_balance};
+use admin::{is_pages_only, read_balance, read_config, update_balance};
 use nft_info::{read_nft, update_nft, write_nft, Action, Category};
 use soroban_sdk::{contracttype, log, symbol_short, vec, Address, Env, IntoVal, Symbol, Val, Vec};
-use storage_types::{DataKey, TokenId, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS};
+use storage_types::{
+    DataKey, FightKey, PagedListKind, PagedPosKind, TokenId, PAGE_SIZE_FIGHTS,
+    STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS,
+};
 use user_info::read_user;
 
 use super::remove_owner_card;
@@ -61,21 +64,41 @@ pub fn write_fight(env: Env, user: Address, category: Category, token_id: TokenI
         .persistent()
         .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 
-    let key = DataKey::Fights;
-    let mut fights = read_fights(env.clone());
-    if let Some(pos) = fights.iter().position(|fight| {
-        fight.owner == owner && fight.category == category && fight.token_id == token_id
-    }) {
-        fights.set(pos.try_into().unwrap(), fight.clone())
-    } else {
-        fights.push_back(fight.clone());
+    if !is_pages_only(&env) {
+        let key = DataKey::Fights;
+        let mut fights = read_fights(env.clone());
+        if let Some(pos) = fights.iter().position(|fight| {
+            fight.owner == owner && fight.category == category && fight.token_id == token_id
+        }) {
+            fights.set(pos.try_into().unwrap(), fight.clone())
+        } else {
+            fights.push_back(fight.clone());
+        }
+
+        env.storage().persistent().set(&key, &fights);
+
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
     }
 
-    env.storage().persistent().set(&key, &fights);
-
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
+    // New paged global index (IDs only)
+    if !env.storage().persistent().has(&DataKey::Pos(
+        PagedPosKind::Fights,
+        owner.clone(),
+        category.clone(),
+        token_id.clone(),
+    ))
+    {
+        add_fight_page_index(
+            &env,
+            FightKey {
+                owner,
+                category,
+                token_id,
+            },
+        );
+    }
 
     env.events().publish(
         (symbol_short!("fight"), symbol_short!("open")),
@@ -101,37 +124,63 @@ pub fn read_fight(env: Env, user: Address, category: Category, token_id: TokenId
 pub fn remove_fight(env: Env, user: Address, category: Category, token_id: TokenId) {
     let owner = read_user(&env, user).owner;
 
-    let key = DataKey::Fights;
-    let mut fights = read_fights(env.clone());
-    if let Some(pos) = fights.iter().position(|fight| {
-        fight.owner == owner && fight.category == category && fight.token_id == token_id
-    }) {
-        let fight = read_fight(
-            env.clone(),
-            owner.clone(),
-            category.clone(),
-            token_id.clone(),
-        );
-        env.events().publish(
-            (symbol_short!("fight"), symbol_short!("close")),
-            fight.clone(),
-        );
-        fights.remove(pos.try_into().unwrap());
+    let fight = read_fight(
+        env.clone(),
+        owner.clone(),
+        category.clone(),
+        token_id.clone(),
+    );
+    env.events().publish(
+        (symbol_short!("fight"), symbol_short!("close")),
+        fight.clone(),
+    );
+
+    if !is_pages_only(&env) {
+        let key = DataKey::Fights;
+        let mut fights = read_fights(env.clone());
+        if let Some(pos) = fights.iter().position(|fight| {
+            fight.owner == owner && fight.category == category && fight.token_id == token_id
+        }) {
+            fights.remove(pos.try_into().unwrap());
+        }
+
+        env.storage().persistent().set(&key, &fights);
+
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
     }
-
-    env.storage().persistent().set(&key, &fights);
-
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, STORAGE_THRESHOLD_LEDGERS, STORAGE_BUMP_LEDGERS);
 
     log!(&env, "remove_fight >> ", owner.clone());
     let key = DataKey::Fight(owner.clone(), category.clone(), token_id.clone());
     log!(&env, "remove_fight >> ", "key = ", key);
     env.storage().persistent().remove(&key);
+
+    // Remove from paged global index
+    remove_fight_page_index(&env, owner, category, token_id);
 }
 
 pub fn read_fights(env: Env) -> Vec<Fight> {
+    if is_pages_only(&env) {
+        let count = env
+            .storage()
+            .persistent()
+            .get::<_, u32>(&DataKey::PagedCount(PagedListKind::Fights))
+            .unwrap_or(0);
+        let mut out = vec![&env.clone()];
+        let mut idx = 0;
+        while idx < count {
+            if let Some(key) = read_fight_key_at(&env, idx) {
+                let fight_key =
+                    DataKey::Fight(key.owner.clone(), key.category.clone(), key.token_id.clone());
+                if let Some(fight) = env.storage().persistent().get(&fight_key) {
+                    out.push_back(fight);
+                }
+            }
+            idx += 1;
+        }
+        return out;
+    }
     let key = DataKey::Fights;
     if let Some(fights) = env.storage().persistent().get(&key) {
         env.storage().persistent().extend_ttl(
@@ -143,6 +192,232 @@ pub fn read_fights(env: Env) -> Vec<Fight> {
     } else {
         vec![&env.clone()]
     }
+}
+
+pub fn read_fights_count(env: &Env) -> u32 {
+    let count = env
+        .storage()
+        .persistent()
+        .get::<_, u32>(&DataKey::PagedCount(PagedListKind::Fights))
+        .unwrap_or(0);
+    if count == 0 && !is_pages_only(env) {
+        let legacy = read_fights(env.clone());
+        if !legacy.is_empty() {
+            return legacy.len();
+        }
+    }
+    count
+}
+
+pub fn read_fights_page(env: &Env, cursor: u32, limit: u32) -> Vec<FightKey> {
+    if limit == 0 {
+        return Vec::new(env);
+    }
+    let count = read_fights_count(env);
+    if !is_pages_only(env)
+        && !env
+            .storage()
+            .persistent()
+            .has(&DataKey::PagedCount(PagedListKind::Fights))
+    {
+        let legacy = read_fights(env.clone());
+        let total = legacy.len();
+        if cursor >= total {
+            return Vec::new(env);
+        }
+        let end = (cursor.saturating_add(limit)).min(total);
+        let mut out: Vec<FightKey> = Vec::new(env);
+        let mut idx = cursor;
+        while idx < end {
+            let fight = legacy.get(idx).unwrap();
+            out.push_back(FightKey {
+                owner: fight.owner.clone(),
+                category: fight.category.clone(),
+                token_id: fight.token_id.clone(),
+            });
+            idx += 1;
+        }
+        return out;
+    }
+    if cursor >= count {
+        return Vec::new(env);
+    }
+    let end = (cursor.saturating_add(limit)).min(count);
+    let mut out: Vec<FightKey> = Vec::new(env);
+    let mut idx = cursor;
+    while idx < end {
+        if let Some(key) = read_fight_key_at(env, idx) {
+            out.push_back(key);
+        }
+        idx += 1;
+    }
+    out
+}
+
+fn read_fight_key_at(env: &Env, idx: u32) -> Option<FightKey> {
+    let page = idx / PAGE_SIZE_FIGHTS;
+    let off = idx % PAGE_SIZE_FIGHTS;
+    let key = DataKey::PagedList(PagedListKind::Fights, page);
+    let page_vec: Vec<FightKey> = env.storage().persistent().get(&key).unwrap_or(Vec::new(env));
+    if off < page_vec.len() {
+        Some(page_vec.get(off).unwrap())
+    } else {
+        None
+    }
+}
+
+fn write_fights_count(env: &Env, count: u32) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::PagedCount(PagedListKind::Fights), &count);
+    env.storage().persistent().extend_ttl(
+        &DataKey::PagedCount(PagedListKind::Fights),
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
+}
+
+fn add_fight_page_index(env: &Env, key: FightKey) {
+    let count = env
+        .storage()
+        .persistent()
+        .get::<_, u32>(&DataKey::PagedCount(PagedListKind::Fights))
+        .unwrap_or(0);
+    let page = count / PAGE_SIZE_FIGHTS;
+    let off = count % PAGE_SIZE_FIGHTS;
+    let page_key = DataKey::PagedList(PagedListKind::Fights, page);
+    let mut page_vec: Vec<FightKey> = env.storage().persistent().get(&page_key).unwrap_or(Vec::new(env));
+    if off == page_vec.len() {
+        page_vec.push_back(key.clone());
+    } else if off < page_vec.len() {
+        page_vec.set(off, key.clone());
+    } else {
+        panic!("PagedList(Fights) corrupted: offset beyond page length");
+    }
+    env.storage().persistent().set(&page_key, &page_vec);
+    env.storage().persistent().extend_ttl(
+        &page_key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
+    env.storage().persistent().set(
+        &DataKey::Pos(
+            PagedPosKind::Fights,
+            key.owner.clone(),
+            key.category.clone(),
+            key.token_id.clone(),
+        ),
+        &count,
+    );
+    env.storage().persistent().extend_ttl(
+        &DataKey::Pos(PagedPosKind::Fights, key.owner, key.category, key.token_id),
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
+    write_fights_count(env, count + 1);
+}
+
+fn remove_fight_page_index(env: &Env, owner: Address, category: Category, token_id: TokenId) {
+    let pos_key =
+        DataKey::Pos(PagedPosKind::Fights, owner.clone(), category.clone(), token_id.clone());
+    let pos = env.storage().persistent().get::<_, u32>(&pos_key);
+    if pos.is_none() {
+        return;
+    }
+    let pos = pos.unwrap();
+    let count = read_fights_count(env);
+    if count == 0 {
+        return;
+    }
+    let last = count - 1;
+    if pos != last {
+        if let Some(last_key) = read_fight_key_at(env, last) {
+            let dst_page = pos / PAGE_SIZE_FIGHTS;
+            let dst_off = pos % PAGE_SIZE_FIGHTS;
+            let dst_page_key = DataKey::PagedList(PagedListKind::Fights, dst_page);
+            let mut dst_vec: Vec<FightKey> =
+                env.storage().persistent().get(&dst_page_key).unwrap_or(Vec::new(env));
+            dst_vec.set(dst_off, last_key.clone());
+            env.storage().persistent().set(&dst_page_key, &dst_vec);
+            env.storage().persistent().extend_ttl(
+                &dst_page_key,
+                STORAGE_THRESHOLD_LEDGERS,
+                STORAGE_BUMP_LEDGERS,
+            );
+            env.storage().persistent().set(
+                &DataKey::Pos(
+                    PagedPosKind::Fights,
+                    last_key.owner.clone(),
+                    last_key.category.clone(),
+                    last_key.token_id.clone(),
+                ),
+                &pos,
+            );
+            env.storage().persistent().extend_ttl(
+                &DataKey::Pos(
+                    PagedPosKind::Fights,
+                    last_key.owner,
+                    last_key.category,
+                    last_key.token_id,
+                ),
+                STORAGE_THRESHOLD_LEDGERS,
+                STORAGE_BUMP_LEDGERS,
+            );
+        }
+    }
+    let last_page = last / PAGE_SIZE_FIGHTS;
+    let last_off = last % PAGE_SIZE_FIGHTS;
+    let last_page_key = DataKey::PagedList(PagedListKind::Fights, last_page);
+    let mut last_vec: Vec<FightKey> =
+        env.storage().persistent().get(&last_page_key).unwrap_or(Vec::new(env));
+    if last_off + 1 == last_vec.len() {
+        last_vec.pop_back();
+    } else {
+        last_vec.remove(last_off.into());
+    }
+    if last_vec.is_empty() {
+        env.storage().persistent().remove(&last_page_key);
+    } else {
+        env.storage().persistent().set(&last_page_key, &last_vec);
+        env.storage().persistent().extend_ttl(
+            &last_page_key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+    }
+    env.storage().persistent().remove(&pos_key);
+    write_fights_count(env, count - 1);
+}
+
+pub fn migrate_fights_to_pages(env: &Env, start: u32, limit: u32) -> u32 {
+    let fights = read_fights(env.clone());
+    let total = fights.len();
+    if start >= total {
+        return total;
+    }
+    let end = (start.saturating_add(limit)).min(total);
+    let mut idx = start;
+    while idx < end {
+        let fight = fights.get(idx).unwrap();
+        let pos_key = DataKey::Pos(
+            PagedPosKind::Fights,
+            fight.owner.clone(),
+            fight.category.clone(),
+            fight.token_id.clone(),
+        );
+        if !env.storage().persistent().has(&pos_key) {
+            add_fight_page_index(
+                env,
+                FightKey {
+                    owner: fight.owner.clone(),
+                    category: fight.category.clone(),
+                    token_id: fight.token_id.clone(),
+                },
+            );
+        }
+        idx += 1;
+    }
+    end
 }
 
 pub fn get_currency_price(env: Env, oracle_contract_id: Address, currency: FightCurrency) -> i128 {

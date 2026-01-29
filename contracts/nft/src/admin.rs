@@ -61,6 +61,63 @@ pub fn read_config(e: &Env) -> Config {
     config
 }
 
+pub fn is_pages_only(e: &Env) -> bool {
+    let key = symbol_short!("pg_only");
+    if let Some(value) = e.storage().persistent().get::<_, bool>(&key) {
+        e.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        value
+    } else {
+        false
+    }
+}
+
+pub fn set_pages_only(e: &Env, enabled: bool) {
+    let key = symbol_short!("pg_only");
+    e.storage().persistent().set(&key, &enabled);
+    e.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
+}
+
+pub fn read_total_effective_deck_power(e: &Env) -> u32 {
+    let key = symbol_short!("deff");
+    if let Some(value) = e.storage().persistent().get::<_, u32>(&key) {
+        e.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        value
+    } else {
+        0
+    }
+}
+
+pub fn write_total_effective_deck_power(e: &Env, value: u32) {
+    let key = symbol_short!("deff");
+    e.storage().persistent().set(&key, &value);
+    e.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
+}
+
+pub fn update_total_effective_deck_power<F>(e: &Env, f: F)
+where
+    F: FnOnce(&Env, &mut u32),
+{
+    let mut value = read_total_effective_deck_power(e);
+    f(e, &mut value);
+    write_total_effective_deck_power(e, value);
+}
+
 pub(crate) fn write_balance(e: &Env, balance: &Balance) {
     // Balance(u32) to track the different tokens balance???
     let key = DataKey::Balance;
@@ -420,5 +477,32 @@ pub fn touch_globals(e: &Env) {
             STORAGE_THRESHOLD_LEDGERS,
             STORAGE_BUMP_LEDGERS,
         );
+    }
+
+    // 11. Paged index counts and migration cursors (no per-page scan here)
+    let page_meta = [
+        DataKey::PagedCount(PagedListKind::Stakes),
+        DataKey::PagedCount(PagedListKind::Fights),
+        DataKey::PagedCount(PagedListKind::Lendings),
+        DataKey::PagedCount(PagedListKind::Borrowings),
+        DataKey::PagedCount(PagedListKind::Decks),
+        DataKey::PagedCount(PagedListKind::Rounds),
+        DataKey::PagedCount(PagedListKind::AllCardIds),
+        DataKey::MigrationCursor(PagedListKind::Stakes),
+        DataKey::MigrationCursor(PagedListKind::Fights),
+        DataKey::MigrationCursor(PagedListKind::Lendings),
+        DataKey::MigrationCursor(PagedListKind::Borrowings),
+        DataKey::MigrationCursor(PagedListKind::Decks),
+        DataKey::MigrationCursor(PagedListKind::Rounds),
+    ];
+
+    for key in page_meta.iter() {
+        if e.storage().persistent().has(key) {
+            e.storage().persistent().extend_ttl(
+                key,
+                STORAGE_THRESHOLD_LEDGERS,
+                STORAGE_BUMP_LEDGERS,
+            );
+        }
     }
 }

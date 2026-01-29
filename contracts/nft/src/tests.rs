@@ -2,9 +2,17 @@
 use super::*;
 use crate::contract::NFT;
 use crate::pot::management::{read_pot_snapshot, read_user_generic_claimable};
-use crate::storage_types::{Config, DataKey, Deck, TokenId};
+use crate::storage_types::{
+    Config, DataKey, Deck, PagedListKind, PagedPosKind, PotStatus, StakeKey, TokenId, User,
+    PAGE_SIZE_STAKES,
+};
 use soroban_sdk::testutils::Address as TestAddress;
 use soroban_sdk::{vec, Address, Env, Vec};
+use crate::actions::stake::{self, Stake};
+use crate::admin::set_pages_only;
+use crate::metadata::CardMetadata;
+use crate::nft_info::{Action, Card, Category};
+use crate::pot::management::set_current_round;
 
 #[soroban_sdk::contract]
 pub struct MockToken;
@@ -74,6 +82,195 @@ fn write_decks(e: &Env, contract: &Address, players: &[(Address, u32)], bonus: u
         // Write Decks collection
         e.storage().persistent().set(&DataKey::Decks, &decks);
     });
+}
+
+#[test]
+fn migrate_stakes_idempotent_and_pos() {
+    let e = Env::default();
+    let (nft_addr, _xtar_token, _generic_token) = init_contract(&e);
+    let owner1 = <Address as TestAddress>::generate(&e);
+    let owner2 = <Address as TestAddress>::generate(&e);
+
+    let mut stakes: Vec<Stake> = Vec::new(&e);
+    stakes.push_back(Stake {
+        owner: owner1.clone(),
+        category: Category::Skill,
+        token_id: TokenId(1),
+        power: 10,
+        period: 1,
+        interest_percentage: 1,
+        staked_time: 1,
+    });
+    stakes.push_back(Stake {
+        owner: owner2.clone(),
+        category: Category::Leader,
+        token_id: TokenId(2),
+        power: 20,
+        period: 2,
+        interest_percentage: 2,
+        staked_time: 2,
+    });
+
+    e.as_contract(&nft_addr, || {
+        e.storage().persistent().set(&DataKey::Stakes, &stakes);
+        stake::migrate_stakes_to_pages(&e, 0, 10);
+
+        let count: u32 = e
+            .storage()
+            .persistent()
+            .get(&DataKey::PagedCount(PagedListKind::Stakes))
+            .unwrap_or(0);
+        assert_eq!(count, stakes.len());
+
+        stake::migrate_stakes_to_pages(&e, 0, 10);
+        let count2: u32 = e
+            .storage()
+            .persistent()
+            .get(&DataKey::PagedCount(PagedListKind::Stakes))
+            .unwrap_or(0);
+        assert_eq!(count2, count);
+
+        for idx in 0..stakes.len() {
+            let s = stakes.get(idx).unwrap();
+            let pos_key = DataKey::Pos(
+                PagedPosKind::Stakes,
+                s.owner.clone(),
+                s.category.clone(),
+                s.token_id.clone(),
+            );
+            let pos: u32 = e.storage().persistent().get(&pos_key).unwrap();
+            assert_eq!(pos, idx as u32);
+
+            let page = pos / PAGE_SIZE_STAKES;
+            let off = pos % PAGE_SIZE_STAKES;
+            let page_key = DataKey::PagedList(PagedListKind::Stakes, page);
+            let page_vec: Vec<StakeKey> = e.storage().persistent().get(&page_key).unwrap();
+            let key = page_vec.get(off).unwrap();
+            assert_eq!(key.owner, s.owner);
+            assert_eq!(key.category, s.category);
+            assert_eq!(key.token_id, s.token_id);
+        }
+    });
+}
+
+#[test]
+fn pages_only_skips_legacy_stakes() {
+    let e = Env::default();
+    let (nft_addr, _xtar_token, _generic_token) = init_contract(&e);
+    let owner = <Address as TestAddress>::generate(&e);
+
+    let user = User {
+        owner: owner.clone(),
+        power: 0,
+        terry: 0,
+        total_history_terry: 0,
+        level: 1,
+    };
+
+    e.as_contract(&nft_addr, || {
+        e.storage().persistent().set(&DataKey::User(owner.clone()), &user);
+        set_pages_only(&e, true);
+
+        stake::write_stake(
+            &e,
+            owner.clone(),
+            Category::Skill,
+            TokenId(3),
+            Stake {
+                owner: owner.clone(),
+                category: Category::Skill,
+                token_id: TokenId(3),
+                power: 5,
+                period: 1,
+                interest_percentage: 1,
+                staked_time: 1,
+            },
+        );
+
+        assert!(!e.storage().persistent().has(&DataKey::Stakes));
+    });
+}
+
+#[test]
+#[should_panic(expected = "Card locked by action")]
+fn add_power_to_locked_card_fails() {
+    let e = Env::default();
+    let (nft_addr, _xtar_token, _generic_token) = init_contract(&e);
+    let owner = <Address as TestAddress>::generate(&e);
+    let nft = NFTClient::new(&e, &nft_addr);
+
+    e.as_contract(&nft_addr, || {
+        e.storage().instance().set(
+            &DataKey::TokenId(1),
+            &CardMetadata {
+                initial_power: 10,
+                max_power: 100,
+                level: 1,
+                category: Category::Skill,
+                price_xtar: 0,
+                price_terry: 0,
+                token_id: 1,
+            },
+        );
+        e.storage().persistent().set(
+            &DataKey::User(owner.clone()),
+            &User {
+                owner: owner.clone(),
+                power: 10,
+                terry: 0,
+                total_history_terry: 0,
+                level: 1,
+            },
+        );
+        e.storage().persistent().set(
+            &DataKey::Card(owner.clone(), TokenId(1)),
+            &Card {
+                power: 10,
+                locked_by_action: Action::Stake,
+            },
+        );
+    });
+
+    nft.add_power_to_card(&owner, &1, &5);
+}
+
+#[test]
+#[should_panic]
+fn deck_mutations_blocked_during_pot() {
+    let e = Env::default();
+    let (nft_addr, _xtar_token, _generic_token) = init_contract(&e);
+    let owner = <Address as TestAddress>::generate(&e);
+    let nft = NFTClient::new(&e, &nft_addr);
+
+    e.as_contract(&nft_addr, || {
+        // Mark current round = 1 and set next round status to Totals
+        set_current_round(&e, 1);
+        e.storage()
+            .persistent()
+            .set(&DataKey::PotStatus(2), &PotStatus::Totals);
+    });
+
+    nft.place(&owner, &TokenId(1));
+}
+
+#[test]
+fn read_pot_status_and_cursor() {
+    let e = Env::default();
+    let (nft_addr, _xtar_token, _generic_token) = init_contract(&e);
+    let nft = NFTClient::new(&e, &nft_addr);
+
+    // Defaults for unknown round
+    let status = nft.get_pot_status(&1);
+    let cursor = nft.get_pot_cursor(&1);
+    assert_eq!(status, PotStatus::Init);
+    assert_eq!(cursor, 0);
+
+    // After open_pot_start, status is Totals and cursor 0
+    nft.open_pot_start(&1);
+    let status = nft.get_pot_status(&1);
+    let cursor = nft.get_pot_cursor(&1);
+    assert_eq!(status, PotStatus::Totals);
+    assert_eq!(cursor, 0);
 }
 
 #[test]
@@ -155,6 +352,31 @@ fn no_eligible_players_no_claim() {
     nft.open_pot(&1);
 
     // No rewards available due to no eligible players; skip claim
+}
+
+#[test]
+fn pot_multi_step_flow() {
+    let e = Env::default();
+    let (nft_addr, xtar_token, _generic_token) = init_contract(&e);
+    let nft = NFTClient::new(&e, &nft_addr);
+
+    let p1 = <Address as TestAddress>::generate(&e);
+    let p2 = <Address as TestAddress>::generate(&e);
+    write_decks(&e, &nft_addr, &[(p1.clone(), 100), (p2.clone(), 300)], 0);
+
+    nft.register_token(&xtar_token);
+    nft.accumulate_pot_token(&xtar_token, &1000);
+
+    nft.open_pot_start(&1);
+    nft.open_pot_process_totals(&1, &1);
+    nft.open_pot_process_totals(&1, &1);
+    nft.open_pot_process_shares(&1, &1);
+    nft.open_pot_process_shares(&1, &1);
+    nft.open_pot_finalize(&1);
+
+    let snapshot = nft.get_historical_snapshot(&1).unwrap();
+    assert_eq!(snapshot.total_participants, 2);
+    assert!(snapshot.total_effective_power > 0);
 }
 
 #[test]

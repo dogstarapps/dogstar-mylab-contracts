@@ -1,7 +1,7 @@
 //! This contract demonstrates a sample implementation of the Soroban token
 //! interface.
 
-use crate::actions::{read_deck, deck::read_decks};
+use crate::actions::{read_deck, deck::{read_decks, recompute_deck_after_power_change}};
 use crate::actions::{
     burn, deck, fight, lending,
     lending::{Borrowing, Lending},
@@ -12,7 +12,7 @@ use crate::actions::{
     update_level, write_administrator, write_balance, write_config, read_contract_vault,
     write_contract_vault, read_user_claimable_balance, write_user_claimable_balance,
     read_dogstar_claimable, write_dogstar_claimable, update_balance, update_contract_vault,
-    update_user_claimable_balance, update_config,
+    update_user_claimable_balance, update_config, set_pages_only, is_pages_only,
 };
 use crate::error::NFTError;
 use crate::event::*;
@@ -26,7 +26,7 @@ use crate::storage_types::*;
 };
 
 use soroban_sdk::{
-    contract, contractimpl, token, Address, BytesN, Env, Symbol};
+    contract, contractimpl, log, panic_with_error, token, Address, BytesN, Env, Symbol};
 use soroban_sdk::{vec, String, Vec};
 use soroban_token_sdk::TokenUtils;
 
@@ -405,6 +405,102 @@ impl NFT {
         crate::admin::touch_globals(&e);
     }
 
+    pub fn migrate_stakes_to_pages(e: Env, start: u32, limit: u32) -> u32 {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+        let next = stake::migrate_stakes_to_pages(&e, start, limit);
+        e.storage()
+            .persistent()
+            .set(&DataKey::MigrationCursor(PagedListKind::Stakes), &next);
+        e.storage().persistent().extend_ttl(
+            &DataKey::MigrationCursor(PagedListKind::Stakes),
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        next
+    }
+
+    pub fn migrate_fights_to_pages(e: Env, start: u32, limit: u32) -> u32 {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+        let next = fight::migrate_fights_to_pages(&e, start, limit);
+        e.storage()
+            .persistent()
+            .set(&DataKey::MigrationCursor(PagedListKind::Fights), &next);
+        e.storage().persistent().extend_ttl(
+            &DataKey::MigrationCursor(PagedListKind::Fights),
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        next
+    }
+
+    pub fn migrate_lendings_to_pages(e: Env, start: u32, limit: u32) -> u32 {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+        let next = lending::migrate_lendings_to_pages(&e, start, limit);
+        e.storage()
+            .persistent()
+            .set(&DataKey::MigrationCursor(PagedListKind::Lendings), &next);
+        e.storage().persistent().extend_ttl(
+            &DataKey::MigrationCursor(PagedListKind::Lendings),
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        next
+    }
+
+    pub fn migrate_borrowings_to_pages(e: Env, start: u32, limit: u32) -> u32 {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+        let next = lending::migrate_borrowings_to_pages(&e, start, limit);
+        e.storage()
+            .persistent()
+            .set(&DataKey::MigrationCursor(PagedListKind::Borrowings), &next);
+        e.storage().persistent().extend_ttl(
+            &DataKey::MigrationCursor(PagedListKind::Borrowings),
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        next
+    }
+
+    pub fn migrate_decks_to_pages(e: Env, start: u32, limit: u32) -> u32 {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+        let next = deck::migrate_decks_to_pages(&e, start, limit);
+        e.storage()
+            .persistent()
+            .set(&DataKey::MigrationCursor(PagedListKind::Decks), &next);
+        e.storage().persistent().extend_ttl(
+            &DataKey::MigrationCursor(PagedListKind::Decks),
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        next
+    }
+
+    pub fn migrate_rounds_to_pages(e: Env, start: u32, limit: u32) -> u32 {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+        let next = crate::pot::management::migrate_rounds_to_pages(&e, start, limit);
+        e.storage()
+            .persistent()
+            .set(&DataKey::MigrationCursor(PagedListKind::Rounds), &next);
+        e.storage().persistent().extend_ttl(
+            &DataKey::MigrationCursor(PagedListKind::Rounds),
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        next
+    }
+
     pub fn add_level(e: &Env, level: Level) -> u32 {
         bump_instance(e);
         add_level(e, level)
@@ -503,6 +599,134 @@ impl NFT {
         });
     }
 
+    pub fn set_pages_only_mode(e: Env, enabled: bool) {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+        set_pages_only(&e, enabled);
+    }
+
+    pub fn touch_paged(e: Env, kind: PagedListKind, page_from: u32, page_limit: u32) {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+
+        let mut page = page_from;
+        let mut processed = 0;
+        while processed < page_limit {
+            let page_key = DataKey::PagedList(kind.clone(), page);
+            if !e.storage().persistent().has(&page_key) {
+                break;
+            }
+            e.storage().persistent().extend_ttl(
+                &page_key,
+                STORAGE_THRESHOLD_LEDGERS,
+                STORAGE_BUMP_LEDGERS,
+            );
+
+            match kind {
+                PagedListKind::Stakes => {
+                    let page_vec: Vec<StakeKey> =
+                        e.storage().persistent().get(&page_key).unwrap_or(Vec::new(&e));
+                    for key in page_vec.iter() {
+                        let pos_key = DataKey::Pos(
+                            PagedPosKind::Stakes,
+                            key.owner.clone(),
+                            key.category.clone(),
+                            key.token_id.clone(),
+                        );
+                        e.storage().persistent().extend_ttl(
+                            &pos_key,
+                            STORAGE_THRESHOLD_LEDGERS,
+                            STORAGE_BUMP_LEDGERS,
+                        );
+                    }
+                }
+                PagedListKind::Fights => {
+                    let page_vec: Vec<FightKey> =
+                        e.storage().persistent().get(&page_key).unwrap_or(Vec::new(&e));
+                    for key in page_vec.iter() {
+                        let pos_key = DataKey::Pos(
+                            PagedPosKind::Fights,
+                            key.owner.clone(),
+                            key.category.clone(),
+                            key.token_id.clone(),
+                        );
+                        e.storage().persistent().extend_ttl(
+                            &pos_key,
+                            STORAGE_THRESHOLD_LEDGERS,
+                            STORAGE_BUMP_LEDGERS,
+                        );
+                    }
+                }
+                PagedListKind::Lendings => {
+                    let page_vec: Vec<LendingKey> =
+                        e.storage().persistent().get(&page_key).unwrap_or(Vec::new(&e));
+                    for key in page_vec.iter() {
+                        let pos_key = DataKey::Pos(
+                            PagedPosKind::Lendings,
+                            key.owner.clone(),
+                            key.category.clone(),
+                            key.token_id.clone(),
+                        );
+                        e.storage().persistent().extend_ttl(
+                            &pos_key,
+                            STORAGE_THRESHOLD_LEDGERS,
+                            STORAGE_BUMP_LEDGERS,
+                        );
+                    }
+                }
+                PagedListKind::Borrowings => {
+                    let page_vec: Vec<BorrowingKey> =
+                        e.storage().persistent().get(&page_key).unwrap_or(Vec::new(&e));
+                    for key in page_vec.iter() {
+                        let pos_key = DataKey::Pos(
+                            PagedPosKind::Borrowings,
+                            key.owner.clone(),
+                            key.category.clone(),
+                            key.token_id.clone(),
+                        );
+                        e.storage().persistent().extend_ttl(
+                            &pos_key,
+                            STORAGE_THRESHOLD_LEDGERS,
+                            STORAGE_BUMP_LEDGERS,
+                        );
+                    }
+                }
+                PagedListKind::Decks => {
+                    let page_vec: Vec<DeckKey> =
+                        e.storage().persistent().get(&page_key).unwrap_or(Vec::new(&e));
+                    for key in page_vec.iter() {
+                        let pos_key = DataKey::Pos(
+                            PagedPosKind::Decks,
+                            key.owner.clone(),
+                            Category::Leader,
+                            TokenId(0),
+                        );
+                        e.storage().persistent().extend_ttl(
+                            &pos_key,
+                            STORAGE_THRESHOLD_LEDGERS,
+                            STORAGE_BUMP_LEDGERS,
+                        );
+                    }
+                }
+                PagedListKind::Rounds | PagedListKind::AllCardIds => {}
+            }
+
+            page = page.saturating_add(1);
+            processed += 1;
+        }
+
+        let count_key = DataKey::PagedCount(kind);
+        if e.storage().persistent().has(&count_key) {
+            e.storage().persistent().extend_ttl(
+                &count_key,
+                STORAGE_THRESHOLD_LEDGERS,
+                STORAGE_BUMP_LEDGERS,
+            );
+        }
+    }
+
     pub fn set_fee_percentages(
         e: Env,
         withdrawable_percentage: u32,
@@ -586,6 +810,23 @@ impl NFT {
 
     pub fn get_all_cards(e: &Env) -> soroban_sdk::Vec<CardMetadata> {
         let mut all_cards = soroban_sdk::Vec::new(&e);
+        if is_pages_only(e) {
+            let total = crate::metadata::read_all_card_ids_count(e);
+            let mut cursor: u32 = 0;
+            let limit: u32 = PAGE_SIZE_ALL_CARDS;
+            while cursor < total {
+                let page = crate::metadata::read_all_card_ids_page(e, cursor, limit);
+                if page.is_empty() {
+                    break;
+                }
+                for token_id in page.iter() {
+                    let card_metadata = read_metadata(e, token_id.0);
+                    all_cards.push_back(card_metadata);
+                }
+                cursor = cursor.saturating_add(limit);
+            }
+            return all_cards;
+        }
         let key = DataKey::AllCardIds;
         if e.storage().persistent().has(&key) {
             e.storage().persistent().extend_ttl(
@@ -599,6 +840,20 @@ impl NFT {
             .persistent()
             .get::<DataKey, soroban_sdk::Vec<TokenId>>(&key)
             .unwrap_or(soroban_sdk::Vec::new(&e));
+        for token_id in card_ids.iter() {
+            let card_metadata = read_metadata(e, token_id.0);
+            all_cards.push_back(card_metadata);
+        }
+        all_cards
+    }
+
+    pub fn get_all_cards_count(e: &Env) -> u32 {
+        crate::metadata::read_all_card_ids_count(e)
+    }
+
+    pub fn get_all_cards_page(e: &Env, cursor: u32, limit: u32) -> soroban_sdk::Vec<CardMetadata> {
+        let mut all_cards = soroban_sdk::Vec::new(&e);
+        let card_ids = crate::metadata::read_all_card_ids_page(e, cursor, limit);
         for token_id in card_ids.iter() {
             let card_metadata = read_metadata(e, token_id.0);
             all_cards.push_back(card_metadata);
@@ -623,9 +878,28 @@ impl NFT {
 
     pub fn add_power_to_card(env: &Env, player: Address, token_id: u32, amount: u32) {
         bump_instance(env);
+        player.require_auth();
+        assert!(amount > 0, "Invalid amount");
+
+        let token = TokenId(token_id);
+        let card = read_nft(env, player.clone(), token.clone()).expect("Card not found");
+        match card.locked_by_action {
+            Action::None => {}
+            Action::Deck => {}
+            _ => panic!("Card locked by action"),
+        }
+
+        if card.locked_by_action == Action::Deck {
+            if let Some(in_progress) = read_pot_in_progress_round(env) {
+                let status = read_pot_status(env, in_progress);
+                if status != PotStatus::Init && status != PotStatus::Finalized {
+                    panic_with_error!(env, NFTError::PotInProgress);
+                }
+            }
+        }
         
         // Single writer update
-        update_nft(env, player.clone(), TokenId(token_id), |e, card| {
+        update_nft(env, player.clone(), token.clone(), |e, card| {
             // Cap power to metadata max
             let metadata = crate::metadata::read_metadata(e, token_id);
             let new_power = (card.power as u128 + amount as u128)
@@ -637,6 +911,10 @@ impl NFT {
             assert!(user.power >= amount, "Insufficient user POWER");
             user.power = user.power.checked_sub(amount).expect("POWER underflow");
         });
+
+        if card.locked_by_action == Action::Deck {
+            recompute_deck_after_power_change(env, player);
+        }
     }
 
     pub fn read_user(env: &Env, player: Address) -> User {
@@ -690,6 +968,8 @@ impl NFT {
     pub fn get_player_potential_reward(env: Env, player: Address) -> PendingReward {
         let current_round = get_current_round(&env);
         let balance = read_pot_balance(&env);
+        let total_decks = deck::read_decks_count(&env);
+        let total_decks = deck::read_decks_count(&env);
         let deck = read_deck(env.clone(), player.clone());
         let players = get_eligible_players(&env);
         let mut total_effective_power: u128 = 0;
@@ -737,14 +1017,31 @@ impl NFT {
 
     pub fn get_pending_rewards(env: Env, player: Address) -> Vec<PendingReward> {
         let mut pending = Vec::new(&env);
-        for round in get_all_rounds(&env).iter() {
+        let mut cursor: u32 = 0;
+        let limit = PAGE_SIZE_ROUNDS;
+        loop {
+            let page = get_rounds_page(&env, cursor, limit);
+            if page.is_empty() {
+                break;
+            }
+            for round in page.iter() {
             if let Some(reward) = read_pending_reward(&env, round, &player) {
                 if reward.status != RewardStatus::Claimed {
                     pending.push_back(reward);
                 }
             }
+            }
+            cursor = cursor.saturating_add(limit);
         }
         pending
+    }
+
+    pub fn get_rounds_count(env: Env) -> u32 {
+        crate::pot::management::get_rounds_count(&env)
+    }
+
+    pub fn get_rounds_page(env: Env, cursor: u32, limit: u32) -> Vec<u32> {
+        crate::pot::management::get_rounds_page(&env, cursor, limit)
     }
 
     pub fn accumulate_pot(env: Env, terry: i128, power: u32, xtar: i128, from: Option<Address>, action: Option<Action>) {                                      
@@ -893,14 +1190,50 @@ impl NFT {
     }
 
     pub fn open_pot(env: Env, round: u32) -> Result<(), NFTError> {
+        // Backward-compatible wrapper: executes full flow in one call (may be heavy).
         let admin = read_administrator(&env);
         admin.require_auth();
         bump_instance(&env);
+
+        Self::open_pot_start_internal(env.clone(), round)?;
+        let total = read_pot_total_decks(&env, round);
+        if total > PAGE_SIZE_DECKS {
+            return Err(NFTError::PotTooLarge);
+        }
+        if total > 0 {
+            Self::open_pot_process_totals_internal(env.clone(), round, total);
+            Self::open_pot_process_shares_internal(env.clone(), round, total);
+        } else {
+            // Advance status to Shares so finalize can complete with zero decks.
+            Self::open_pot_process_totals_internal(env.clone(), round, 1);
+        }
+        Self::open_pot_finalize_internal(env, round)?;
+        Ok(())
+    }
+
+    pub fn open_pot_start(env: Env, round: u32) -> Result<(), NFTError> {
+        let admin = read_administrator(&env);
+        admin.require_auth();
+        bump_instance(&env);
+        Self::open_pot_start_internal(env, round)
+    }
+
+    fn open_pot_start_internal(env: Env, round: u32) -> Result<(), NFTError> {
         let current_round = get_current_round(&env);
         if round <= current_round {
             return Err(NFTError::RoundAlreadyProcessed);
         }
+        if let Some(in_progress) = read_pot_in_progress_round(&env) {
+            let in_progress_status = read_pot_status(&env, in_progress);
+            if in_progress != round && in_progress_status != PotStatus::Finalized {
+                return Err(NFTError::PotInProgress);
+            }
+        }
+        let status = read_pot_status(&env, round);
+        assert!(status == PotStatus::Init, "Round already started");
+
         let balance = read_pot_balance(&env);
+        let total_decks = deck::read_decks_count(&env);
         
         // Move pot balance to vault for distribution
         update_contract_vault(&env, |_, vault| {
@@ -917,7 +1250,12 @@ impl NFT {
         let mut generic_tokens = Vec::new(&env);
         for token_addr in registered.iter() {
             let amt = read_accumulated_by_token(&env, &token_addr);
-            if amt > 0 { generic_tokens.push_back(crate::storage_types::GenericTokenAmount { token: token_addr.clone(), amount: amt }); }
+            if amt > 0 {
+                generic_tokens.push_back(crate::storage_types::GenericTokenAmount {
+                    token: token_addr.clone(),
+                    amount: amt,
+                });
+            }
             // reset accumulated for next cycle
             if amt != 0 { 
                 update_accumulated_by_token(&env, &token_addr, |_, current| {
@@ -937,23 +1275,200 @@ impl NFT {
             generic_tokens,
         };
         write_pot_snapshot(&env, round, &snapshot);
+        write_pot_total_decks(&env, round, total_decks);
         emit_pot_opened(&env, round, &snapshot);
         
-        // Calculate and store player shares as claimable balances
-        Self::calculate_and_store_claimable_shares(&env, round, &snapshot);
-        
-        set_current_round(&env, round);
-        add_round(&env, round);
-        
+        // Zero pot balances for the next accumulation cycle
         update_pot_balance(&env, |e, pot| {
             pot.accumulated_terry = 0;
             pot.accumulated_power = 0;
             pot.accumulated_xtar = 0;
+            pot.last_updated = e.ledger().timestamp();
+        });
+
+        write_pot_in_progress_round(&env, round);
+        write_pot_status(&env, round, PotStatus::Totals);
+        write_pot_cursor(&env, round, 0);
+        Ok(())
+    }
+
+    pub fn open_pot_process_totals(env: Env, round: u32, limit: u32) -> u32 {
+        let admin = read_administrator(&env);
+        admin.require_auth();
+        bump_instance(&env);
+        Self::open_pot_process_totals_internal(env, round, limit)
+    }
+
+    fn open_pot_process_totals_internal(env: Env, round: u32, limit: u32) -> u32 {
+        assert!(limit > 0, "Limit must be > 0");
+
+        let status = read_pot_status(&env, round);
+        assert!(status == PotStatus::Totals, "Round not in totals phase");
+
+        let total = read_pot_total_decks(&env, round);
+        let mut cursor = read_pot_cursor(&env, round);
+        if cursor >= total {
+            write_pot_status(&env, round, PotStatus::Shares);
+            write_pot_cursor(&env, round, 0);
+            return 0;
+        }
+
+        let page = deck::read_decks_page(&env, cursor, limit);
+        let mut batch_effective: u32 = 0;
+        let mut batch_participants: u32 = 0;
+        for key in page.iter() {
+            let deck = deck::read_deck(env.clone(), key.owner.clone());
+            if deck.token_ids.len() == 4 {
+                batch_participants += 1;
+                batch_effective += calculate_effective_power(deck.total_power, deck.bonus);
+            }
+        }
+
+        if let Some(mut snapshot) = read_pot_snapshot(&env, round) {
+            snapshot.total_participants = snapshot.total_participants.saturating_add(batch_participants);
+            snapshot.total_effective_power =
+                snapshot.total_effective_power.saturating_add(batch_effective);
+            write_pot_snapshot(&env, round, &snapshot);
+        }
+
+        cursor = cursor.saturating_add(page.len());
+        write_pot_cursor(&env, round, cursor);
+        if cursor >= total {
+            write_pot_status(&env, round, PotStatus::Shares);
+            write_pot_cursor(&env, round, 0);
+        }
+        cursor
+    }
+
+    pub fn open_pot_process_shares(env: Env, round: u32, limit: u32) -> u32 {
+        let admin = read_administrator(&env);
+        admin.require_auth();
+        bump_instance(&env);
+        Self::open_pot_process_shares_internal(env, round, limit)
+    }
+
+    fn open_pot_process_shares_internal(env: Env, round: u32, limit: u32) -> u32 {
+        assert!(limit > 0, "Limit must be > 0");
+
+        let status = read_pot_status(&env, round);
+        assert!(status == PotStatus::Shares, "Round not in shares phase");
+
+        let snapshot = read_pot_snapshot(&env, round).expect("Missing pot snapshot");
+        let total_effective = snapshot.total_effective_power;
+        let total = read_pot_total_decks(&env, round);
+        let mut cursor = read_pot_cursor(&env, round);
+        if cursor >= total {
+            return cursor;
+        }
+
+        let page = deck::read_decks_page(&env, cursor, limit);
+        for key in page.iter() {
+            let deck = deck::read_deck(env.clone(), key.owner.clone());
+            if deck.token_ids.len() != 4 {
+                continue;
+            }
+            let effective_power = calculate_effective_power(deck.total_power, deck.bonus);
+            let share_percentage = if total_effective > 0 {
+                (effective_power * 10000) / total_effective
+            } else {
+                0
+            };
+
+            let reward = PlayerReward {
+                share_percentage,
+                effective_power,
+                round_number: round,
+                deck_bonus: deck.bonus,
+                deck_categories: deck.deck_categories,
+            };
+            write_player_reward(&env, round, &deck.owner, &reward);
+            emit_share_calculated(&env, &deck.owner, &reward);
+
+            let terry_share = (snapshot.total_terry * share_percentage as i128) / 10000;
+            let power_share = (snapshot.total_power * share_percentage) / 10000;
+            let xtar_share = (snapshot.total_xtar * share_percentage as i128) / 10000;
+            update_user_claimable_balance(&env, &deck.owner, |_, user_claimable| {
+                user_claimable.terry += terry_share;
+                user_claimable.power += power_share;
+                user_claimable.xtar += xtar_share;
+                user_claimable.last_claim_round = round;
+            });
+
+            for gta in snapshot.generic_tokens.iter() {
+                let token_share = (gta.amount * share_percentage as i128) / 10000;
+                if token_share > 0 {
+                    update_user_generic_claimable(&env, &deck.owner, &gta.token, |_, current| {
+                        *current += token_share;
+                    });
+                }
+            }
+        }
+
+        cursor = cursor.saturating_add(page.len());
+        write_pot_cursor(&env, round, cursor);
+        cursor
+    }
+
+    pub fn open_pot_finalize(env: Env, round: u32) -> Result<(), NFTError> {
+        let admin = read_administrator(&env);
+        admin.require_auth();
+        bump_instance(&env);
+        Self::open_pot_finalize_internal(env, round)
+    }
+
+    pub fn force_reset_pot(env: Env, round: u32) -> Result<(), NFTError> {
+        let admin = read_administrator(&env);
+        admin.require_auth();
+        bump_instance(&env);
+
+        let status = read_pot_status(&env, round);
+        if status == PotStatus::Finalized {
+            return Err(NFTError::RoundAlreadyProcessed);
+        }
+        let snapshot = read_pot_snapshot(&env, round);
+        assert!(snapshot.is_some(), "Pot snapshot not found");
+
+        write_pot_in_progress_round(&env, round);
+        let total = read_pot_total_decks(&env, round);
+        if total == 0 {
+            let current_total = deck::read_decks_count(&env);
+            write_pot_total_decks(&env, round, current_total);
+        }
+
+        write_pot_status(&env, round, PotStatus::Totals);
+        write_pot_cursor(&env, round, 0);
+        log!(&env, "force_reset_pot", round);
+        Ok(())
+    }
+
+    pub fn rebuild_deck_effective(env: Env, start: u32, limit: u32) -> u32 {
+        let admin = read_administrator(&env);
+        admin.require_auth();
+        bump_instance(&env);
+        deck::rebuild_total_effective_deck_power(&env, start, limit)
+    }
+
+    fn open_pot_finalize_internal(env: Env, round: u32) -> Result<(), NFTError> {
+
+        let status = read_pot_status(&env, round);
+        assert!(status == PotStatus::Shares, "Round not ready to finalize");
+
+        let total = read_pot_total_decks(&env, round);
+        let cursor = read_pot_cursor(&env, round);
+        assert!(cursor >= total, "Pot processing not complete");
+        
+        set_current_round(&env, round);
+        add_round(&env, round);
+        
+        let balance = read_pot_balance(&env);
+        update_pot_balance(&env, |e, pot| {
             pot.last_opening_round = round;
             pot.total_openings = balance.total_openings + 1;
             pot.last_updated = e.ledger().timestamp();
         });
 
+        write_pot_status(&env, round, PotStatus::Finalized);
+        clear_pot_in_progress_round(&env);
         Ok(())
     }
     
@@ -1110,6 +1625,14 @@ impl NFT {
         get_eligible_players(&env)
     }
 
+    pub fn get_eligible_players_count(env: Env) -> u32 {
+        get_eligible_players_count(&env)
+    }
+
+    pub fn get_eligible_players_page(env: Env, cursor: u32, limit: u32) -> Vec<Address> {
+        get_eligible_players_page(&env, cursor, limit)
+    }
+
     pub fn get_eligible_players_with_shares(
         env: Env,
     ) -> Vec<(Address, u32, u32, u32, Vec<(u32, u32, Category)>, u32)> {
@@ -1122,6 +1645,14 @@ impl NFT {
 
     pub fn get_current_round(env: Env) -> u32 {
         get_current_round(&env)
+    }
+
+    pub fn get_pot_status(env: Env, round: u32) -> PotStatus {
+        read_pot_status(&env, round)
+    }
+
+    pub fn get_pot_cursor(env: Env, round: u32) -> u32 {
+        read_pot_cursor(&env, round)
     }
 }
 
@@ -1166,6 +1697,14 @@ impl NFT {
 
     pub fn read_stakes(env: Env) -> Vec<stake::Stake> {
         stake::read_stakes(env)
+    }
+
+    pub fn read_stakes_count(env: Env) -> u32 {
+        stake::read_stakes_count(&env)
+    }
+
+    pub fn read_stakes_page(env: Env, cursor: u32, limit: u32) -> Vec<StakeKey> {
+        stake::read_stakes_page(&env, cursor, limit)
     }
 }
 
@@ -1216,6 +1755,14 @@ impl NFT {
         fight::read_fights(env)
     }
 
+    pub fn read_fights_count(env: Env) -> u32 {
+        fight::read_fights_count(&env)
+    }
+
+    pub fn read_fights_page(env: Env, cursor: u32, limit: u32) -> Vec<FightKey> {
+        fight::read_fights_page(&env, cursor, limit)
+    }
+
     pub fn check_liquidation(env: Env, liquidator: Address, user: Address, category: Category, token_id: TokenId) {
         bump_instance(&env);
         fight::check_liquidation(env, liquidator, user, category, token_id)
@@ -1258,6 +1805,15 @@ impl NFT {
         lending::borrow_quote(env, borrower, category, token_id, power)
     }
 
+    pub fn repay_quote(
+        env: Env,
+        borrower: Address,
+        category: Category,
+        token_id: TokenId,
+    ) -> lending::RepayQuote {
+        lending::repay_quote(env, borrower, category, token_id)
+    }
+
     pub fn read_lending(
         env: Env,
         player: Address,
@@ -1284,6 +1840,30 @@ impl NFT {
         lending::read_lendings(env)
     }
 
+    pub fn read_borrowings_count(env: Env) -> u32 {
+        lending::read_borrowings_count(&env)
+    }
+
+    pub fn read_borrowings_page(
+        env: Env,
+        cursor: u32,
+        limit: u32,
+    ) -> Vec<BorrowingKey> {
+        lending::read_borrowings_page(&env, cursor, limit)
+    }
+
+    pub fn read_lendings_count(env: Env) -> u32 {
+        lending::read_lendings_count(&env)
+    }
+
+    pub fn read_lendings_page(
+        env: Env,
+        cursor: u32,
+        limit: u32,
+    ) -> Vec<LendingKey> {
+        lending::read_lendings_page(&env, cursor, limit)
+    }
+
     pub fn touch_loans(env: Env, loans: Vec<(Address, Category, TokenId)>) {
         lending::touch_loans(env, loans)
     }
@@ -1292,21 +1872,32 @@ impl NFT {
 #[contractimpl]
 impl NFT {
     pub fn place(env: Env, owner: Address, token_id: TokenId) {
+        owner.require_auth();
         bump_instance(&env);
         deck::place(env, owner, token_id);
     }
 
     pub fn replace(env: Env, owner: Address, prev_token_id: TokenId, token_id: TokenId) {
+        owner.require_auth();
         bump_instance(&env);
         deck::replace(env, owner, prev_token_id, token_id);
     }
 
     pub fn remove_place(env: Env, owner: Address, token_id: TokenId) {
+        owner.require_auth();
         bump_instance(&env);
         deck::remove_place(env, owner, token_id)
     }
 
     pub fn read_deck(env: Env, owner: Address) -> Deck {
         deck::read_deck(env, owner)
+    }
+
+    pub fn read_decks_count(env: Env) -> u32 {
+        deck::read_decks_count(&env)
+    }
+
+    pub fn read_decks_page(env: Env, cursor: u32, limit: u32) -> Vec<DeckKey> {
+        deck::read_decks_page(&env, cursor, limit)
     }
 }

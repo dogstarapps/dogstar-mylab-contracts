@@ -1,19 +1,21 @@
-use crate::actions::deck::read_deck;
+use crate::actions::deck::{read_deck, read_decks_count, read_decks_page};
 use crate::event::*;
 use crate::storage_types::{
-    DataKey, Deck, DogstarBalance, PendingReward, PlayerReward, PotBalance,
-    PotSnapshot, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS,
+    DataKey, Deck, DogstarBalance, PagedListKind, PendingReward, PlayerReward, PotBalance,
+    PotSnapshot, PAGE_SIZE_DECKS, PAGE_SIZE_ROUNDS, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS,
 };
-use crate::admin::{read_config, read_contract_vault, write_contract_vault, update_contract_vault};
+use crate::admin::{is_pages_only, read_config, read_contract_vault, write_contract_vault, update_contract_vault};
 use crate::event::*;
 use crate::nft_info::{Action, Category, read_nft};
 use crate::metadata::read_metadata;
 use crate::user_info::read_user;
-use soroban_sdk::{Address, Env, Vec};
+use soroban_sdk::{symbol_short, Address, Env, Vec};
 
 /// Calculates effective power by applying the deck bonus to base power.
 pub fn calculate_effective_power(base_power: u32, deck_bonus: u32) -> u32 {
-    base_power * (100 + deck_bonus) / 100
+    let base = base_power as u64;
+    let bonus = (100 + deck_bonus) as u64;
+    ((base.saturating_mul(bonus)) / 100) as u32
 }
 
 // Pot Balance Management
@@ -36,6 +38,35 @@ pub fn read_pot_balance(env: &Env) -> PotBalance {
             last_updated: env.ledger().timestamp(),
         }
     }
+}
+
+pub fn read_pot_in_progress_round(env: &Env) -> Option<u32> {
+    let key = symbol_short!("pot_ip");
+    if let Some(round) = env.storage().persistent().get::<_, u32>(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        Some(round)
+    } else {
+        None
+    }
+}
+
+pub fn write_pot_in_progress_round(env: &Env, round: u32) {
+    let key = symbol_short!("pot_ip");
+    env.storage().persistent().set(&key, &round);
+    env.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
+}
+
+pub fn clear_pot_in_progress_round(env: &Env) {
+    let key = symbol_short!("pot_ip");
+    env.storage().persistent().remove(&key);
 }
 
 pub(crate) fn write_pot_balance(env: &Env, balance: &PotBalance) {
@@ -374,7 +405,84 @@ pub fn set_current_round(env: &Env, round: u32) {
     );
 }
 
+pub fn read_pot_status(env: &Env, round: u32) -> crate::storage_types::PotStatus {
+    let key = DataKey::PotStatus(round);
+    env.storage()
+        .persistent()
+        .get::<_, crate::storage_types::PotStatus>(&key)
+        .unwrap_or(crate::storage_types::PotStatus::Init)
+}
+
+fn pot_total_decks_key(round: u32) -> (soroban_sdk::Symbol, u32) {
+    (symbol_short!("pot_tot"), round)
+}
+
+pub fn write_pot_total_decks(env: &Env, round: u32, total: u32) {
+    let key = pot_total_decks_key(round);
+    env.storage().persistent().set(&key, &total);
+    env.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
+}
+
+pub fn read_pot_total_decks(env: &Env, round: u32) -> u32 {
+    let key = pot_total_decks_key(round);
+    if let Some(total) = env.storage().persistent().get::<_, u32>(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            STORAGE_THRESHOLD_LEDGERS,
+            STORAGE_BUMP_LEDGERS,
+        );
+        total
+    } else {
+        0
+    }
+}
+
+pub fn write_pot_status(env: &Env, round: u32, status: crate::storage_types::PotStatus) {
+    let key = DataKey::PotStatus(round);
+    env.storage().persistent().set(&key, &status);
+    env.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
+}
+
+pub fn read_pot_cursor(env: &Env, round: u32) -> u32 {
+    let key = DataKey::PotCursor(round);
+    env.storage().persistent().get::<_, u32>(&key).unwrap_or(0)
+}
+
+pub fn write_pot_cursor(env: &Env, round: u32, cursor: u32) {
+    let key = DataKey::PotCursor(round);
+    env.storage().persistent().set(&key, &cursor);
+    env.storage().persistent().extend_ttl(
+        &key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
+}
+
 pub fn get_all_rounds(env: &Env) -> Vec<u32> {
+    if is_pages_only(env) {
+        let count = env
+            .storage()
+            .persistent()
+            .get::<_, u32>(&DataKey::PagedCount(PagedListKind::Rounds))
+            .unwrap_or(0);
+        let mut out = Vec::new(env);
+        let mut idx = 0;
+        while idx < count {
+            if let Some(round) = read_round_at(env, idx) {
+                out.push_back(round);
+            }
+            idx += 1;
+        }
+        return out;
+    }
     let key = DataKey::AllRounds;
     if let Some(rounds) = env.storage().persistent().get(&key) {
         env.storage().persistent().extend_ttl(
@@ -388,9 +496,116 @@ pub fn get_all_rounds(env: &Env) -> Vec<u32> {
     }
 }
 
+pub fn get_rounds_count(env: &Env) -> u32 {
+    let count = env
+        .storage()
+        .persistent()
+        .get::<_, u32>(&DataKey::PagedCount(PagedListKind::Rounds))
+        .unwrap_or(0);
+    if count == 0 && !is_pages_only(env) {
+        let legacy = get_all_rounds(env);
+        if !legacy.is_empty() {
+            return legacy.len();
+        }
+    }
+    count
+}
+
+pub fn get_rounds_page(env: &Env, cursor: u32, limit: u32) -> Vec<u32> {
+    if limit == 0 {
+        return Vec::new(env);
+    }
+    let count = get_rounds_count(env);
+    if !is_pages_only(env)
+        && !env
+            .storage()
+            .persistent()
+            .has(&DataKey::PagedCount(PagedListKind::Rounds))
+    {
+        let legacy = get_all_rounds(env);
+        let total = legacy.len();
+        if cursor >= total {
+            return Vec::new(env);
+        }
+        let end = (cursor.saturating_add(limit)).min(total);
+        let mut out: Vec<u32> = Vec::new(env);
+        let mut idx = cursor;
+        while idx < end {
+            out.push_back(legacy.get(idx).unwrap());
+            idx += 1;
+        }
+        return out;
+    }
+    if cursor >= count {
+        return Vec::new(env);
+    }
+    let end = (cursor.saturating_add(limit)).min(count);
+    let mut out: Vec<u32> = Vec::new(env);
+    let mut idx = cursor;
+    while idx < end {
+        if let Some(round) = read_round_at(env, idx) {
+            out.push_back(round);
+        }
+        idx += 1;
+    }
+    out
+}
+
+fn read_round_at(env: &Env, idx: u32) -> Option<u32> {
+    let page = idx / PAGE_SIZE_ROUNDS;
+    let off = idx % PAGE_SIZE_ROUNDS;
+    let key = DataKey::PagedList(PagedListKind::Rounds, page);
+    let page_vec: Vec<u32> = env.storage().persistent().get(&key).unwrap_or(Vec::new(env));
+    if off < page_vec.len() {
+        Some(page_vec.get(off).unwrap())
+    } else {
+        None
+    }
+}
+
+fn write_rounds_count(env: &Env, count: u32) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::PagedCount(PagedListKind::Rounds), &count);
+    env.storage().persistent().extend_ttl(
+        &DataKey::PagedCount(PagedListKind::Rounds),
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
+}
+
+fn add_round_page_index(env: &Env, round: u32) {
+    let count = env
+        .storage()
+        .persistent()
+        .get::<_, u32>(&DataKey::PagedCount(PagedListKind::Rounds))
+        .unwrap_or(0);
+    let page = count / PAGE_SIZE_ROUNDS;
+    let off = count % PAGE_SIZE_ROUNDS;
+    let page_key = DataKey::PagedList(PagedListKind::Rounds, page);
+    let mut page_vec: Vec<u32> = env.storage().persistent().get(&page_key).unwrap_or(Vec::new(env));
+    if off == page_vec.len() {
+        page_vec.push_back(round);
+    } else if off < page_vec.len() {
+        page_vec.set(off, round);
+    } else {
+        panic!("PagedList(Rounds) corrupted: offset beyond page length");
+    }
+    env.storage().persistent().set(&page_key, &page_vec);
+    env.storage().persistent().extend_ttl(
+        &page_key,
+        STORAGE_THRESHOLD_LEDGERS,
+        STORAGE_BUMP_LEDGERS,
+    );
+    write_rounds_count(env, count + 1);
+}
+
 pub fn add_round(env: &Env, round: u32) {
+    let mut legacy_len: u32 = 0;
+    if !is_pages_only(env) {
     let mut rounds = get_all_rounds(env);
     rounds.push_back(round);
+        legacy_len = rounds.len();
 
     env.storage().persistent().set(&DataKey::AllRounds, &rounds);
     env.storage().persistent().extend_ttl(
@@ -398,30 +613,79 @@ pub fn add_round(env: &Env, round: u32) {
         STORAGE_THRESHOLD_LEDGERS,
         STORAGE_BUMP_LEDGERS,
     );
+    }
+
+    // New paged index (idempotent)
+    let stored_count = env
+        .storage()
+        .persistent()
+        .get::<_, u32>(&DataKey::PagedCount(PagedListKind::Rounds))
+        .unwrap_or(0);
+    if is_pages_only(env) {
+        add_round_page_index(env, round);
+    } else if stored_count < legacy_len {
+        add_round_page_index(env, round);
+    }
+}
+
+pub fn migrate_rounds_to_pages(env: &Env, start: u32, limit: u32) -> u32 {
+    let rounds = get_all_rounds(env);
+    let total = rounds.len();
+    if start >= total {
+        return total;
+    }
+    let end = (start.saturating_add(limit)).min(total);
+    let mut idx = start;
+    while idx < end {
+        let round = rounds.get(idx).unwrap();
+        if get_rounds_count(env) < rounds.len() {
+            add_round_page_index(env, round);
+        }
+        idx += 1;
+    }
+    end
 }
 
 pub fn get_eligible_players(env: &Env) -> Vec<Address> {
     let mut eligible_players = Vec::new(env);
-    let key = DataKey::Decks;
-    
-    let decks = if let Some(decks) = env.storage().persistent().get::<DataKey, Vec<Deck>>(&key) {
-        // Extend TTL for the global decks list to ensure it stays alive during pot distribution
-        env.storage().persistent().extend_ttl(
-            &key,
-            STORAGE_THRESHOLD_LEDGERS,
-            STORAGE_BUMP_LEDGERS,
-        );
-        decks
-    } else {
-        Vec::new(env)
-    };
+    let total = read_decks_count(env);
+    let mut cursor: u32 = 0;
+    let limit = PAGE_SIZE_DECKS;
+    while cursor < total {
+        let page = read_decks_page(env, cursor, limit);
+        if page.is_empty() {
+            break;
+        }
+        for key in page.iter() {
+            let deck = read_deck(env.clone(), key.owner.clone());
+        if deck.token_ids.len() == 4 {
+            eligible_players.push_back(deck.owner);
+        }
+        }
+        cursor = cursor.saturating_add(limit);
+    }
 
-    for deck in decks.iter() {
+    eligible_players
+}
+
+pub fn get_eligible_players_count(env: &Env) -> u32 {
+    // Count is based on deck pages to match cursor semantics in get_eligible_players_page.
+    read_decks_count(env)
+}
+
+pub fn get_eligible_players_page(env: &Env, cursor: u32, limit: u32) -> Vec<Address> {
+    // Cursor/limit are applied over the deck index; returned list is filtered to eligible owners.
+    let mut eligible_players = Vec::new(env);
+    let page = read_decks_page(env, cursor, limit);
+    if page.is_empty() {
+        return eligible_players;
+    }
+    for key in page.iter() {
+        let deck = read_deck(env.clone(), key.owner.clone());
         if deck.token_ids.len() == 4 {
             eligible_players.push_back(deck.owner);
         }
     }
-
     eligible_players
 }
 

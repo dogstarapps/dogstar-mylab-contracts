@@ -4,10 +4,55 @@ use soroban_sdk::{contracttype, Address, String, Vec};
 pub(crate) const LEDGERS_PER_DAY: u32 = 17280;
 pub(crate) const STORAGE_BUMP_LEDGERS: u32 = 180 * LEDGERS_PER_DAY; // ~180 days ~3,110,400
 pub(crate) const STORAGE_THRESHOLD_LEDGERS: u32 = 30 * LEDGERS_PER_DAY; // ~30 days ~518,400
+pub(crate) const PAGE_SIZE_STAKES: u32 = 50;
+pub(crate) const PAGE_SIZE_FIGHTS: u32 = 50;
+pub(crate) const PAGE_SIZE_LENDINGS: u32 = 50;
+pub(crate) const PAGE_SIZE_BORROWINGS: u32 = 50;
+pub(crate) const PAGE_SIZE_DECKS: u32 = 50;
+pub(crate) const PAGE_SIZE_ROUNDS: u32 = 50;
+pub(crate) const PAGE_SIZE_ALL_CARDS: u32 = 50;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[contracttype]
 pub struct TokenId(pub u32);
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StakeKey {
+    pub owner: Address,
+    pub category: Category,
+    pub token_id: TokenId,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FightKey {
+    pub owner: Address,
+    pub category: Category,
+    pub token_id: TokenId,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LendingKey {
+    pub owner: Address,
+    pub category: Category,
+    pub token_id: TokenId,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BorrowingKey {
+    pub owner: Address,
+    pub category: Category,
+    pub token_id: TokenId,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeckKey {
+    pub owner: Address,
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -215,6 +260,37 @@ pub struct BorrowMeta {
     pub reserve_remaining: u32, // remaining reserve earmarked for interest/haircuts
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PotStatus {
+    Init,
+    Totals,
+    Shares,
+    Finalized,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PagedListKind {
+    Stakes,
+    Fights,
+    Lendings,
+    Borrowings,
+    Decks,
+    Rounds,
+    AllCardIds,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PagedPosKind {
+    Stakes,
+    Fights,
+    Lendings,
+    Borrowings,
+    Decks,
+}
+
 #[derive(Clone, Debug)]
 #[contracttype]
 pub enum DataKey {
@@ -269,4 +345,11 @@ pub enum DataKey {
     AccumulatedByToken(Address),
     UserGenericClaimable(Address, Address),
     DogstarGenericFee(Address),
+    // Paged global indexes (active only)
+    Pos(PagedPosKind, Address, Category, TokenId),
+    PagedList(PagedListKind, u32),
+    PagedCount(PagedListKind),
+    MigrationCursor(PagedListKind),
+    PotStatus(u32),
+    PotCursor(u32),
 }

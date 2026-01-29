@@ -1,5 +1,5 @@
-use crate::nft_info::Action;
-use crate::storage_types::{PendingReward, PlayerReward, PotSnapshot};
+use crate::nft_info::{Action, Category};
+use crate::storage_types::{PendingReward, PlayerReward, PotSnapshot, TokenId};
 use soroban_sdk::{symbol_short, Address, Env};
 
 // Event Emission
@@ -117,82 +117,87 @@ pub fn emit_burn(env: &Env, player: &Address) {
 }
 
 /// Emits an event when a card is staked.
-pub fn emit_stake(env: &Env, player: &Address) {
+pub fn emit_stake(env: &Env, player: &Address, category: &Category, token_id: &TokenId) {
     env.events().publish(
         (
             symbol_short!("stake"),
             symbol_short!("open"),
             player.clone(),
         ),
-        (),
+        (player.clone(), category.clone(), token_id.clone()),
     );
 }
 
 /// Emits an event when stake power is increased.
-pub fn emit_stake_increased(env: &Env, player: &Address) {
+pub fn emit_stake_increased(
+    env: &Env,
+    player: &Address,
+    category: &Category,
+    token_id: &TokenId,
+) {
     env.events().publish(
         (
             symbol_short!("stake"),
             symbol_short!("increase"),
             player.clone(),
         ),
-        (),
+        (player.clone(), category.clone(), token_id.clone()),
     );
 }
 
 /// Emits an event when a card is unstaked.
-pub fn emit_unstake(env: &Env, player: &Address) {
+pub fn emit_unstake(env: &Env, player: &Address, category: &Category, token_id: &TokenId) {
     env.events().publish(
         (
             symbol_short!("stake"),
             symbol_short!("close"),
             player.clone(),
         ),
-        (),
+        (player.clone(), category.clone(), token_id.clone()),
     );
 }
 
 /// Emits an event when a card is lent.
-pub fn emit_lend(env: &Env, player: &Address) {
+pub fn emit_lend(env: &Env, player: &Address, category: &Category, token_id: &TokenId) {
     env.events().publish(
         (symbol_short!("lend"), symbol_short!("open"), player.clone()),
-        (),
+        (player.clone(), category.clone(), token_id.clone()),
     );
 }
 
 /// Emits an event when lending is withdrawn.
-pub fn emit_withdraw(env: &Env, player: &Address) {
+pub fn emit_withdraw(env: &Env, player: &Address, category: &Category, token_id: &TokenId) {
     env.events().publish(
         (
             symbol_short!("lend"),
             symbol_short!("close"),
             player.clone(),
         ),
-        (),
+        (player.clone(), category.clone(), token_id.clone()),
     );
 }
 
 /// Emits an event when borrowing is made.
-pub fn emit_borrow(env: &Env, player: &Address) {
+pub fn emit_borrow(env: &Env, player: &Address, category: &Category, token_id: &TokenId) {
     env.events().publish(
         (
             symbol_short!("borrow"),
             symbol_short!("open"),
             player.clone(),
         ),
-        (),
+        (player.clone(), category.clone(), token_id.clone()),
     );
 }
 
 /// Emits an event when repayment is made.
-pub fn emit_repay(env: &Env, player: &Address) {
+pub fn emit_repay(env: &Env, player: &Address, category: &Category, token_id: &TokenId) {
     env.events().publish(
         (
             symbol_short!("borrow"),
             symbol_short!("close"),
             player.clone(),
         ),
-        (),
+        (player.clone(), category.clone(), token_id.clone()),
     );
 }
 
