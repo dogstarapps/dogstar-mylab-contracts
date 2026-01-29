@@ -1,9 +1,7 @@
-#![allow(deprecated)]
-
-use crate::{nft_info::remove_nft, user_info::mint_terry, *};
+use crate::{event::{emit_fight_close, emit_fight_open}, nft_info::remove_nft, user_info::mint_terry, *};
 use admin::{is_pages_only, read_config, update_balance};
 use nft_info::{read_nft, update_nft, Action, Category};
-use soroban_sdk::{contracttype, log, symbol_short, vec, Address, Env, IntoVal, Symbol, Val, Vec};
+use soroban_sdk::{contracttype, log, vec, Address, Env, IntoVal, Symbol, Val, Vec};
 use storage_types::{
     DataKey, FightKey, PagedListKind, PagedPosKind, TokenId, PAGE_SIZE_FIGHTS,
     STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS,
@@ -102,10 +100,7 @@ pub fn write_fight(env: Env, user: Address, category: Category, token_id: TokenI
         );
     }
 
-    env.events().publish(
-        (symbol_short!("fight"), symbol_short!("open")),
-        fight.clone(),
-    )
+    emit_fight_open(&env, &fight);
 }
 
 pub fn read_fight(env: Env, user: Address, category: Category, token_id: TokenId) -> Fight {
@@ -132,10 +127,7 @@ pub fn remove_fight(env: Env, user: Address, category: Category, token_id: Token
         category.clone(),
         token_id.clone(),
     );
-    env.events().publish(
-        (symbol_short!("fight"), symbol_short!("close")),
-        fight.clone(),
-    );
+    emit_fight_close(&env, &fight);
 
     if !is_pages_only(&env) {
         let key = DataKey::Fights;

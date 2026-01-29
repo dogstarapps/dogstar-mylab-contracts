@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::event::*;
+use crate::event::emit_reward_claimed;
 use crate::pot::management::{
     get_all_rounds, read_player_reward, read_pot_snapshot, write_pending_reward,
 };

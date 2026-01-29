@@ -1,6 +1,5 @@
 //! This contract demonstrates a sample implementation of the Soroban token
 //! interface.
-#![allow(deprecated)]
 
 use crate::actions::{deck::{read_decks, recompute_deck_after_power_change}, read_deck};
 use crate::actions::{
@@ -15,7 +14,11 @@ use crate::admin::{
     update_user_claimable_balance, update_config, set_pages_only,
 };
 use crate::error::NFTError;
-use crate::event::*;
+use crate::event::{
+    emit_dogstar_fee_accumulated, emit_dogstar_fee_percentage_updated,
+    emit_dogstar_fee_withdrawn, emit_mint, emit_pot_opened, emit_rewards_claimed,
+    emit_share_calculated, emit_transfer,
+};
 use crate::metadata::{read_metadata, write_metadata, CardMetadata};
 use crate::nft_info::{exists, read_nft, remove_nft, update_nft, write_nft, Action, Card, Category, Currency};
 use crate::pot::management::*;
@@ -231,8 +234,11 @@ impl NFT {
         }
 
         // Emit initialization event
-        e.events()
-            .publish((Symbol::new(&e, "initialized"),), (admin,));
+        #[allow(deprecated)]
+        {
+            e.events()
+                .publish((Symbol::new(&e, "initialized"),), (admin,));
+        }
     }
 
     pub fn add_new_level(e: Env, level: Level) {
@@ -384,7 +390,10 @@ impl NFT {
         admin.require_auth();
         bump_instance(&e);
         write_administrator(&e, &new_admin);
-        TokenUtils::new(&e).events().set_admin(admin, new_admin);
+        #[allow(deprecated)]
+        {
+            TokenUtils::new(&e).events().set_admin(admin, new_admin);
+        }
     }
 
     pub fn check_admin(e: Env) -> bool {

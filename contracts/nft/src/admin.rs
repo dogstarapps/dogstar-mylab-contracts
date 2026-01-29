@@ -1,5 +1,3 @@
-#![allow(deprecated)]
-
 use crate::storage_types::*;
 use soroban_sdk::{symbol_short, Address, Env};
 
@@ -172,7 +170,7 @@ pub(crate) fn write_state(e: &Env, state: &State) {
         STORAGE_BUMP_LEDGERS,
     );
 
-    e.events().publish((symbol_short!("state"),), state.clone());
+    crate::event::emit_state_updated(e, &state);
 }
 
 pub fn read_state(e: &Env) -> State {
