@@ -7,8 +7,8 @@ use crate::{
     user_info::mint_terry,
     *,
 };
-use admin::{is_pages_only, read_balance, read_config, update_balance};
-use nft_info::{read_nft, update_nft, write_nft, Action, Category};
+use admin::{is_pages_only, read_config, update_balance};
+use nft_info::{read_nft, update_nft, Action, Category};
 use soroban_sdk::{contracttype, vec, Address, Env, Vec};
 use storage_types::{
     BorrowMeta, BorrowingKey, DataKey, LendingKey, PagedListKind, PagedPosKind, TokenId,
@@ -923,7 +923,7 @@ pub fn borrow(env: Env, user: Address, category: Category, token_id: TokenId, po
     });
 
     user.require_auth();
-    let mut user_info = read_user(&env, user.clone());
+    let user_info = read_user(&env, user.clone());
     let owner = user_info.owner.clone();
     let config = read_config(&env);
     let power_fee: u32 = power.saturating_mul(config.power_action_fee) / 100;
@@ -946,7 +946,7 @@ pub fn borrow(env: Env, user: Address, category: Category, token_id: TokenId, po
 
     // config already read above
 
-    let mut state = read_state(&env);
+    let state = read_state(&env);
     assert!(
         state.total_offer >= borrow_amount as u64,
         "Insufficient power to borrow"
@@ -1241,7 +1241,7 @@ pub fn repay(env: Env, user: Address, category: Category, token_id: TokenId) {
 
     let config = read_config(&env);
 
-    let mut state = read_state(&env);
+    let state = read_state(&env);
 
     let loan_duration_seconds = env
         .ledger()
@@ -1329,12 +1329,13 @@ pub fn repay(env: Env, user: Address, category: Category, token_id: TokenId) {
     });
 }
 
+#[allow(dead_code)]
 fn check_liquidations(env: Env) {
     for borrowing in read_borrowings(env.clone()) {
         let nft = read_nft(&env, borrowing.borrower.clone(), borrowing.token_id.clone()).unwrap();
 
         let config = read_config(&env);
-        let mut state = read_state(&env);
+        let state = read_state(&env);
         let apy = calculate_apy(
             state.total_demand,
             state.total_offer,
@@ -1364,6 +1365,7 @@ fn check_liquidations(env: Env) {
     }
 }
 
+#[allow(dead_code)]
 fn liquidate(env: Env, user: Address, category: Category, token_id: TokenId) {
     user.require_auth();
     let user = read_user(&env, user);
@@ -1379,7 +1381,7 @@ fn liquidate(env: Env, user: Address, category: Category, token_id: TokenId) {
         let nft = read_nft(&env, borrowing.borrower.clone(), borrowing.token_id.clone()).unwrap();
 
         let config = read_config(&env);
-        let mut state = read_state(&env);
+        let state = read_state(&env);
         let apy = calculate_apy(
             state.total_demand,
             state.total_offer,
@@ -1496,7 +1498,7 @@ pub fn withdraw(env: Env, user: Address, category: Category, token_id: TokenId) 
 
     let config = read_config(&env);
 
-    let mut state = read_state(&env);
+    let state = read_state(&env);
 
     let loan_duration_seconds = env.ledger().timestamp().saturating_sub(lending.lent_at);
     let apy = calculate_apy(

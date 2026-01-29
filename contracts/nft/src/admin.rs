@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use crate::storage_types::*;
 use soroban_sdk::{symbol_short, Address, Env};
 
@@ -16,6 +18,7 @@ pub fn write_administrator(env: &Env, id: &Address) {
     env.storage().instance().set(&key, id);
 }
 
+#[allow(dead_code)]
 pub fn is_whitelisted(e: &Env, member: &Address) -> bool {
     let key = DataKey::Whitelist(member.clone());
     if e.storage().persistent().has(&key) {
@@ -341,6 +344,7 @@ where
     write_user_claimable_balance(e, user, &balance);
 }
 
+#[allow(dead_code)]
 pub(crate) fn write_dogstar_claimable(e: &Env, balance: &UserClaimableBalance) {
     let key = DataKey::DogstarClaimableBalance;
     e.storage().persistent().set(&key, balance);
@@ -351,6 +355,7 @@ pub(crate) fn write_dogstar_claimable(e: &Env, balance: &UserClaimableBalance) {
     );
 }
 
+#[allow(dead_code)]
 pub fn read_dogstar_claimable(e: &Env) -> UserClaimableBalance {
     let key = DataKey::DogstarClaimableBalance;
     if let Some(balance) = e.storage().persistent().get(&key) {

@@ -5,7 +5,7 @@ use metadata::read_metadata;
 use nft_info::{read_nft, remove_nft, Action};
 use soroban_sdk::{Address, Env};
 use storage_types::TokenId;
-use user_info::{read_owner_card, read_user, update_user, update_owner_cards};
+use user_info::{update_user, update_owner_cards};
 
 pub fn burn(env: Env, user: Address, token_id: TokenId) {
     user.require_auth();

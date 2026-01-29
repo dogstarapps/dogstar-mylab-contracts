@@ -1,6 +1,8 @@
+#![allow(deprecated)]
+
 use crate::{nft_info::remove_nft, user_info::mint_terry, *};
-use admin::{is_pages_only, read_balance, read_config, update_balance};
-use nft_info::{read_nft, update_nft, write_nft, Action, Category};
+use admin::{is_pages_only, read_config, update_balance};
+use nft_info::{read_nft, update_nft, Action, Category};
 use soroban_sdk::{contracttype, log, symbol_short, vec, Address, Env, IntoVal, Symbol, Val, Vec};
 use storage_types::{
     DataKey, FightKey, PagedListKind, PagedPosKind, TokenId, PAGE_SIZE_FIGHTS,
@@ -538,18 +540,17 @@ pub fn open_position(
     let position_size = margin_usdc * leverage as i128;
 
     // Get currency price from oracle (1)
-    let mut trigger_price = 0;
-
-    #[cfg(not(test))]
-    {
-        trigger_price =
-            get_currency_price(env.clone(), config.oracle_contract_id, currency.clone());
-    }
-    #[cfg(test)]
-    {
-        // Provide a deterministic mock price during tests
-        trigger_price = 1000;
-    }
+    let trigger_price: i128 = {
+        #[cfg(not(test))]
+        {
+            get_currency_price(env.clone(), config.oracle_contract_id, currency.clone())
+        }
+        #[cfg(test)]
+        {
+            // Provide a deterministic mock price during tests
+            1000
+        }
+    };
     log!(&env, "fight >> trigger_price = ", trigger_price);
     // #[cfg(test)]
     // {
@@ -633,15 +634,16 @@ pub fn close_position(env: Env, user: Address, category: Category, token_id: Tok
     let power_to_usdc_rate = config.power_to_usdc_rate;
     let margin_usdc = (fight.power as i128) * power_to_usdc_rate / 10000;
     let position_size = margin_usdc * fight.leverage as i128;
-    let mut current_price = 0;
-    #[cfg(not(test))]
-    {
-        current_price = get_currency_price(env.clone(), config.oracle_contract_id, fight.currency);
-    }
-    #[cfg(test)]
-    {
-        current_price = 86000; // Mock price for tests (86,000 USDC)
-    }
+    let current_price: i128 = {
+        #[cfg(not(test))]
+        {
+            get_currency_price(env.clone(), config.oracle_contract_id, fight.currency)
+        }
+        #[cfg(test)]
+        {
+            86000 // Mock price for tests (86,000 USDC)
+        }
+    };
     log!(&env, "current asset price", current_price.clone());
     assert!(current_price > 0, "Invalid oracle price");
     assert!(fight.trigger_price > 0, "Invalid trigger price");

@@ -1,11 +1,10 @@
 use crate::actions::deck::{read_deck, read_decks_count, read_decks_page};
 use crate::event::*;
 use crate::storage_types::{
-    DataKey, Deck, DogstarBalance, PagedListKind, PendingReward, PlayerReward, PotBalance,
-    PotSnapshot, PAGE_SIZE_DECKS, PAGE_SIZE_ROUNDS, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS,
+    DataKey, DogstarBalance, PagedListKind, PendingReward, PlayerReward, PotBalance, PotSnapshot,
+    PAGE_SIZE_DECKS, PAGE_SIZE_ROUNDS, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS,
 };
-use crate::admin::{is_pages_only, read_config, read_contract_vault, write_contract_vault, update_contract_vault};
-use crate::event::*;
+use crate::admin::{is_pages_only, read_config, update_contract_vault};
 use crate::nft_info::{Action, Category, read_nft};
 use crate::metadata::read_metadata;
 use crate::user_info::read_user;
@@ -356,6 +355,7 @@ pub fn read_player_reward(env: &Env, round: u32, player: &Address) -> Option<Pla
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn write_pending_reward(env: &Env, round: u32, player: &Address, reward: &PendingReward) {
     let key = DataKey::PendingReward(round, player.clone());
     env.storage().persistent().set(&key, reward);
@@ -736,6 +736,7 @@ pub fn get_eligible_players_with_shares(env: &Env) -> Vec<(Address, u32, u32, u3
     result
 }
 
+#[allow(dead_code)]
 pub fn calculate_player_shares(env: &Env, round: u32) {
     let players = get_eligible_players(env);
     let mut total_effective_power: u32 = 0;

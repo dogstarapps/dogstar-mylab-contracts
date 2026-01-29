@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use crate::nft_info::{Action, Category};
 use crate::storage_types::{PendingReward, PlayerReward, PotSnapshot, TokenId};
 use soroban_sdk::{symbol_short, Address, Env};
@@ -79,6 +81,7 @@ pub fn emit_dogstar_fee_percentage_updated(env: &Env, old_fee: u32, new_fee: u32
 }
 
 /// Emits an event when a reward is claimed.
+#[allow(dead_code)]
 pub fn emit_reward_claimed(e: &Env, player: &Address, reward: &PendingReward) {
     e.events().publish(
         (
@@ -91,6 +94,7 @@ pub fn emit_reward_claimed(e: &Env, player: &Address, reward: &PendingReward) {
 }
 
 /// Emits an event when a reward is marked as pending due to missing trustline.
+#[allow(dead_code)]
 pub fn emit_reward_pending(e: &Env, player: &Address, reward: &PendingReward) {
     e.events().publish(
         (

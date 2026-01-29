@@ -1,7 +1,7 @@
 use crate::event::{emit_stake, emit_stake_increased, emit_unstake};
 use crate::{user_info::mint_terry, *};
-use crate::admin::{is_pages_only, read_config, read_state, update_balance, update_state};
-use nft_info::{read_nft, update_nft, write_nft, Action, Category};
+use crate::admin::{is_pages_only, read_config, update_balance, update_state};
+use nft_info::{read_nft, update_nft, Action, Category};
 use soroban_sdk::{contracttype, vec, Address, Env, Vec};
 use storage_types::{
     DataKey, PagedListKind, PagedPosKind, StakeKey, TokenId, PAGE_SIZE_STAKES,
@@ -527,16 +527,15 @@ pub fn unstake(env: Env, user: Address, category: Category, token_id: TokenId) {
     let nft_read = read_nft(&env, owner.clone(), token_id.clone()).unwrap();
     assert!(nft_read.locked_by_action == Action::Stake, "Can't find staked");
 
-    let current_time: u32 = env
-        .ledger()
-        .timestamp()
-        .try_into()
-        .expect("Timestamp exceeds u32 limit");
-
     let stake = read_stake(&env, owner.clone(), category.clone(), token_id.clone())
         ;
     #[cfg(not(test))]
     {
+        let current_time: u32 = env
+            .ledger()
+            .timestamp()
+            .try_into()
+            .expect("Timestamp exceeds u32 limit");
         assert!(
             stake.staked_time + stake.period <= current_time,
             "Locked Period"

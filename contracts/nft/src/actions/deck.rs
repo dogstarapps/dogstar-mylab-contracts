@@ -7,7 +7,7 @@ use admin::{
     update_total_effective_deck_power, write_total_effective_deck_power,
 };
 use metadata::read_metadata;
-use nft_info::{read_nft, update_nft, write_nft, Action, Category};
+use nft_info::{read_nft, update_nft, Action, Category};
 use soroban_sdk::{log, panic_with_error, vec, Address, Env, Vec};
 use storage_types::{
     DataKey, Deck, DeckKey, PagedListKind, PagedPosKind, PotStatus, TokenId, PAGE_SIZE_DECKS,
@@ -630,6 +630,7 @@ pub fn replace(env: Env, user: Address, prev_token_id: TokenId, token_id: TokenI
     emit_deck_replace(&env, &owner);
 }
 
+#[allow(dead_code)]
 pub fn update_deck(env: Env, user: Address, token_ids: Vec<TokenId>) {
     let round_to_check = read_pot_in_progress_round(&env)
         .unwrap_or_else(|| get_current_round(&env).saturating_add(1));
@@ -702,6 +703,7 @@ pub fn remove_place(env: Env, user: Address, token_id: TokenId) {
 //     // update haw ai percentage
 //
 
+#[allow(dead_code)]
 pub fn update_haw_ai_percentages(_env: Env) {
     // No-op: haw_ai_percentage is computed on read to avoid global scans.
 }

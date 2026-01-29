@@ -54,6 +54,7 @@ pub(crate) fn write_metadata(e: &Env, token_id: u32, metadata: CardMetadata) {
 
 
 // GUARDRAIL: Single-writer helper for metadata
+#[allow(dead_code)]
 pub fn update_metadata<F>(e: &Env, token_id: u32, f: F)
 where
     F: FnOnce(&Env, &mut CardMetadata),

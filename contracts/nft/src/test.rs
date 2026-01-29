@@ -1,4 +1,5 @@
 #![cfg(test)]
+#![allow(deprecated)]
 
 use crate::nft_info::Card;
 use crate::storage_types::*;
@@ -21,7 +22,7 @@ use crate::pot::management::accumulate_pot_internal;
 use soroban_sdk::symbol_short;
 use soroban_sdk::testutils::Ledger as _;
 use soroban_sdk::{log, testutils::Address as _, vec, Address, Env};
-use soroban_sdk::{token::TokenClient, String};
+use soroban_sdk::token::TokenClient;
 use soroban_sdk::{Symbol, TryFromVal};
 
 // Local copies of constants to avoid relying on private items
@@ -75,7 +76,7 @@ fn mint_token(e: &Env, token: Address, to: Address, amount: i128) {
     token_admin_client.mint(&to, &amount);
 }
 
-fn create_metadata(e: &Env) -> CardMetadata {
+fn create_metadata(_e: &Env) -> CardMetadata {
     let metadata = CardMetadata {
         initial_power: 1000,        // Set appropriate value
         max_power: 10000,           // Set appropriate value
@@ -785,7 +786,7 @@ fn test_accumulate_pot() {
     assert_eq!(dogstar_balance.xtar, xtar * fee_percentage / 10000); // 5% = 100
 
     // Verify event
-    let events = e.events().all();
+    let _events = e.events().all();
 
     // assert_eq!(
     //     events,
@@ -1090,7 +1091,7 @@ fn lb_e2e_lend_borrow_repay_withdraw_basic() {
     let admin = Address::generate(&e);
     let lender = Address::generate(&e);
     let borrower = Address::generate(&e);
-    let mut config = generate_config(&e);
+    let config = generate_config(&e);
 
     // Initialize contract
     let nft = create_nft(e.clone(), &contract_id, &admin, &config);
@@ -1409,7 +1410,7 @@ fn lb_borrow_zero_disallowed() {
     let (e, contract_id) = create_test_env();
     let admin = Address::generate(&e);
     let user = Address::generate(&e);
-    let mut config = generate_config(&e);
+    let config = generate_config(&e);
     let nft = create_nft(e.clone(), &contract_id, &admin, &config);
 
     // User with card
@@ -1434,7 +1435,7 @@ fn lb_borrow_exceeds_pool() {
     let admin = Address::generate(&e);
     let lender = Address::generate(&e);
     let borrower = Address::generate(&e);
-    let mut config = generate_config(&e);
+    let config = generate_config(&e);
     let nft = create_nft(e.clone(), &contract_id, &admin, &config);
 
     // Users and TERRY
@@ -1738,7 +1739,7 @@ fn lb_touch_loans_total_haircut_and_ownership_loss() {
 }
 
 #[test]
-fn apy_edge_case_S_zero_capped() {
+fn apy_edge_case_s_zero_capped() {
     // total_offer = 0 scenario -> utilization clamps to 1, APY capped at APY_MAX
     let apy = calculate_apy(10_000, 0, 0, 0, SCALE / 2);
     assert!(apy <= APY_MAX);

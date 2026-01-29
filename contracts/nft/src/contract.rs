@@ -1,18 +1,18 @@
 //! This contract demonstrates a sample implementation of the Soroban token
 //! interface.
+#![allow(deprecated)]
 
-use crate::actions::{read_deck, deck::{read_decks, recompute_deck_after_power_change}};
+use crate::actions::{deck::{read_decks, recompute_deck_after_power_change}, read_deck};
 use crate::actions::{
     burn, deck, fight, lending,
     lending::{Borrowing, Lending},
     stake, SidePosition,
 };
-    use crate::admin::{
+use crate::admin::{
     add_level, has_administrator, read_administrator, read_balance, read_config, read_state,
     update_level, write_administrator, write_balance, write_config, read_contract_vault,
-    write_contract_vault, read_user_claimable_balance, write_user_claimable_balance,
-    read_dogstar_claimable, write_dogstar_claimable, update_balance, update_contract_vault,
-    update_user_claimable_balance, update_config, set_pages_only, is_pages_only,
+    write_contract_vault, read_user_claimable_balance, update_balance, update_contract_vault,
+    update_user_claimable_balance, update_config, set_pages_only,
 };
 use crate::error::NFTError;
 use crate::event::*;
@@ -20,9 +20,9 @@ use crate::metadata::{read_metadata, write_metadata, CardMetadata};
 use crate::nft_info::{exists, read_nft, remove_nft, update_nft, write_nft, Action, Card, Category, Currency};
 use crate::pot::management::*;
 use crate::storage_types::*;
-    use crate::user_info::{
+use crate::user_info::{
     add_card_to_owner, burn_terry, get_user_level, mint_terry, read_owner_card, read_user,
-    write_user, update_owner_cards, update_user,
+    update_owner_cards, update_user, write_user,
 };
 
 use soroban_sdk::{
@@ -937,8 +937,6 @@ impl NFT {
     pub fn get_player_potential_reward(env: Env, player: Address) -> PendingReward {
         let current_round = get_current_round(&env);
         let balance = read_pot_balance(&env);
-        let total_decks = deck::read_decks_count(&env);
-        let total_decks = deck::read_decks_count(&env);
         let deck = read_deck(env.clone(), player.clone());
         let players = get_eligible_players(&env);
         let mut total_effective_power: u128 = 0;
@@ -1072,7 +1070,7 @@ impl NFT {
         assert!(claimer == admin, "Only admin can claim dogstar fees");
         
         let config = read_config(&env);
-        let mut vault = read_contract_vault(&env);
+        let vault = read_contract_vault(&env);
         
         let terry_to_claim = vault.dogstar_terry;
         let power_to_claim = vault.dogstar_power;
@@ -1094,20 +1092,17 @@ impl NFT {
             update_user(&env, claimer.clone(), |_, user| {
                 user.terry += terry_to_claim;
             });
-            vault.dogstar_terry = 0;
         }
         
         if power_to_claim > 0 {
             update_user(&env, claimer.clone(), |_, user| {
                 user.power += power_to_claim;
             });
-            vault.dogstar_power = 0;
         }
         
         if xtar_to_claim > 0 {
             let token = token::Client::new(&env, &config.xtar_token);
             token.transfer(&env.current_contract_address(), &claimer, &xtar_to_claim);
-            vault.dogstar_xtar = 0;
         }
         
         // Claim generic tokens
@@ -1441,6 +1436,7 @@ impl NFT {
         Ok(())
     }
     
+    #[allow(dead_code)]
     fn calculate_and_store_claimable_shares(env: &Env, round: u32, snapshot: &PotSnapshot) {
         calculate_player_shares(env, round);
         
@@ -1481,7 +1477,7 @@ impl NFT {
         player.require_auth();
         bump_instance(&env);
 
-        let mut claimable = read_user_claimable_balance(&env, &player);
+        let claimable = read_user_claimable_balance(&env, &player);
         let config = read_config(&env);
 
         // Also consider generic SAC claimables before failing

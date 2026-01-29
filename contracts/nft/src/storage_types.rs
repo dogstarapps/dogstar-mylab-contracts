@@ -10,7 +10,6 @@ pub(crate) const PAGE_SIZE_LENDINGS: u32 = 50;
 pub(crate) const PAGE_SIZE_BORROWINGS: u32 = 50;
 pub(crate) const PAGE_SIZE_DECKS: u32 = 50;
 pub(crate) const PAGE_SIZE_ROUNDS: u32 = 50;
-pub(crate) const PAGE_SIZE_ALL_CARDS: u32 = 50;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[contracttype]

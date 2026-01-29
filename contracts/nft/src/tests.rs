@@ -1,4 +1,5 @@
 #![cfg(test)]
+#![allow(deprecated)]
 use super::*;
 use crate::contract::NFT;
 use crate::pot::management::{
