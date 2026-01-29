@@ -635,10 +635,15 @@ pub fn migrate_rounds_to_pages(env: &Env, start: u32, limit: u32) -> u32 {
         return total;
     }
     let end = (start.saturating_add(limit)).min(total);
+    let stored_count = env
+        .storage()
+        .persistent()
+        .get::<_, u32>(&DataKey::PagedCount(PagedListKind::Rounds))
+        .unwrap_or(0);
     let mut idx = start;
     while idx < end {
         let round = rounds.get(idx).unwrap();
-        if get_rounds_count(env) < rounds.len() {
+        if stored_count < rounds.len() {
             add_round_page_index(env, round);
         }
         idx += 1;

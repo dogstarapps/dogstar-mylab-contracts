@@ -810,23 +810,6 @@ impl NFT {
 
     pub fn get_all_cards(e: &Env) -> soroban_sdk::Vec<CardMetadata> {
         let mut all_cards = soroban_sdk::Vec::new(&e);
-        if is_pages_only(e) {
-            let total = crate::metadata::read_all_card_ids_count(e);
-            let mut cursor: u32 = 0;
-            let limit: u32 = PAGE_SIZE_ALL_CARDS;
-            while cursor < total {
-                let page = crate::metadata::read_all_card_ids_page(e, cursor, limit);
-                if page.is_empty() {
-                    break;
-                }
-                for token_id in page.iter() {
-                    let card_metadata = read_metadata(e, token_id.0);
-                    all_cards.push_back(card_metadata);
-                }
-                cursor = cursor.saturating_add(limit);
-            }
-            return all_cards;
-        }
         let key = DataKey::AllCardIds;
         if e.storage().persistent().has(&key) {
             e.storage().persistent().extend_ttl(
@@ -840,20 +823,6 @@ impl NFT {
             .persistent()
             .get::<DataKey, soroban_sdk::Vec<TokenId>>(&key)
             .unwrap_or(soroban_sdk::Vec::new(&e));
-        for token_id in card_ids.iter() {
-            let card_metadata = read_metadata(e, token_id.0);
-            all_cards.push_back(card_metadata);
-        }
-        all_cards
-    }
-
-    pub fn get_all_cards_count(e: &Env) -> u32 {
-        crate::metadata::read_all_card_ids_count(e)
-    }
-
-    pub fn get_all_cards_page(e: &Env, cursor: u32, limit: u32) -> soroban_sdk::Vec<CardMetadata> {
-        let mut all_cards = soroban_sdk::Vec::new(&e);
-        let card_ids = crate::metadata::read_all_card_ids_page(e, cursor, limit);
         for token_id in card_ids.iter() {
             let card_metadata = read_metadata(e, token_id.0);
             all_cards.push_back(card_metadata);

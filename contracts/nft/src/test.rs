@@ -4,7 +4,7 @@ use crate::nft_info::Card;
 use crate::storage_types::*;
 use crate::NFTClient;
 use crate::{
-    actions::{fight, FightCurrency, SidePosition},
+    actions::{deck, fight, FightCurrency, SidePosition},
     contract::NFT,
     metadata::CardMetadata,
     nft_info::{Action, Category, Currency},
@@ -1241,6 +1241,91 @@ fn deck_index_removed_when_empty() {
     e.as_contract(&contract_id, || {
         let pos_key = DataKey::Pos(PagedPosKind::Decks, player.clone(), Category::Leader, TokenId(0));
         assert!(!e.storage().persistent().has(&pos_key));
+    });
+}
+
+#[test]
+fn pages_only_skips_legacy_decks() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+    let config = generate_config(&e);
+
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+    nft.set_pages_only_mode(&true);
+
+    nft.create_user(&player);
+    nft.mint_terry(&player, &100000);
+
+    let mut md = create_metadata(&e);
+    md.token_id = 9301;
+    md.category = Category::Leader;
+    md.initial_power = 1000;
+    md.max_power = 20000;
+    nft.create_metadata(&md, &9301);
+
+    nft.mint(&player, &TokenId(9301), &1, &Currency::Terry);
+    nft.place(&player, &TokenId(9301));
+
+    e.as_contract(&contract_id, || {
+        assert!(!e.storage().persistent().has(&DataKey::Decks));
+    });
+}
+
+#[test]
+fn deck_swap_remove_updates_index() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player1 = Address::generate(&e);
+    let player2 = Address::generate(&e);
+    let config = generate_config(&e);
+
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+    nft.set_pages_only_mode(&true);
+
+    nft.create_user(&player1);
+    nft.create_user(&player2);
+    nft.mint_terry(&player1, &100000);
+    nft.mint_terry(&player2, &100000);
+
+    let mut md1 = create_metadata(&e);
+    md1.token_id = 9201;
+    md1.category = Category::Leader;
+    md1.initial_power = 1000;
+    md1.max_power = 20000;
+    nft.create_metadata(&md1, &9201);
+
+    let mut md2 = create_metadata(&e);
+    md2.token_id = 9202;
+    md2.category = Category::Leader;
+    md2.initial_power = 1000;
+    md2.max_power = 20000;
+    nft.create_metadata(&md2, &9202);
+
+    nft.mint(&player1, &TokenId(9201), &1, &Currency::Terry);
+    nft.mint(&player2, &TokenId(9202), &1, &Currency::Terry);
+
+    nft.place(&player1, &TokenId(9201));
+    nft.place(&player2, &TokenId(9202));
+    assert_eq!(nft.read_decks_count(), 2);
+
+    nft.remove_place(&player1, &TokenId(9201));
+    assert_eq!(nft.read_decks_count(), 1);
+
+    e.as_contract(&contract_id, || {
+        let page = deck::read_decks_page(&e, 0, 10);
+        assert_eq!(page.len(), 1);
+        let remaining = page.get(0).unwrap();
+        assert_eq!(remaining.owner, player2);
+
+        let pos_key1 =
+            DataKey::Pos(PagedPosKind::Decks, player1.clone(), Category::Leader, TokenId(0));
+        assert!(!e.storage().persistent().has(&pos_key1));
+
+        let pos_key2 =
+            DataKey::Pos(PagedPosKind::Decks, player2.clone(), Category::Leader, TokenId(0));
+        let pos: u32 = e.storage().persistent().get(&pos_key2).unwrap();
+        assert_eq!(pos, 0);
     });
 }
 

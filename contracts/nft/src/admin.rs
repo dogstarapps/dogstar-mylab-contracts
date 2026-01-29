@@ -487,7 +487,6 @@ pub fn touch_globals(e: &Env) {
         DataKey::PagedCount(PagedListKind::Borrowings),
         DataKey::PagedCount(PagedListKind::Decks),
         DataKey::PagedCount(PagedListKind::Rounds),
-        DataKey::PagedCount(PagedListKind::AllCardIds),
         DataKey::MigrationCursor(PagedListKind::Stakes),
         DataKey::MigrationCursor(PagedListKind::Fights),
         DataKey::MigrationCursor(PagedListKind::Lendings),
