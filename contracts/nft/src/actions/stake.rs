@@ -1,6 +1,7 @@
 use crate::event::{emit_stake, emit_stake_increased, emit_unstake};
 use crate::{user_info::mint_terry, *};
 use crate::admin::{is_pages_only, read_config, update_balance, update_state};
+use crate::metadata::read_metadata;
 use nft_info::{read_nft, update_nft, Action, Category};
 use soroban_sdk::{contracttype, vec, Address, Env, Vec};
 use storage_types::{
@@ -546,8 +547,11 @@ pub fn unstake(env: Env, user: Address, category: Category, token_id: TokenId) {
     let _staked_power = stake.power;
     
     // Single Writer Update
-    update_nft(&env, owner.clone(), token_id.clone(), |_, card| {
-        card.power += stake.power + interest_amount;
+    update_nft(&env, owner.clone(), token_id.clone(), |e, card| {
+        let metadata = read_metadata(e, token_id.0);
+        let new_power = (card.power as u128 + stake.power as u128 + interest_amount as u128)
+            .min(metadata.max_power as u128) as u32;
+        card.power = new_power;
         card.locked_by_action = Action::None;
     });
 

@@ -277,6 +277,34 @@ fn test_add_power() {
 }
 
 #[test]
+fn add_power_caps_at_max_power() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+
+    let mut config = generate_config(&e);
+    let xtar_token = e.register_stellar_asset_contract(admin.clone());
+    config.xtar_token = xtar_token.clone();
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+
+    nft.create_user(&player);
+    nft.mint_terry(&player, &1000);
+
+    let mut metadata = create_metadata(&e);
+    metadata.max_power = 1005;
+    metadata.initial_power = 1000;
+    nft.create_metadata(&metadata, &1);
+    nft.mint(&player, &TokenId(1), &1, &Currency::Terry);
+
+    // Add enough power to exceed max_power
+    let amount: u32 = 100;
+    nft.add_power_to_card(&player, &1, &amount);
+
+    let card = nft.card(&player, &TokenId(1)).unwrap();
+    assert_eq!(card.power, metadata.max_power);
+}
+
+#[test]
 fn stake_mints_terry_and_haw_ai() {
     let (e, contract_id) = create_test_env();
 
@@ -307,6 +335,34 @@ fn stake_mints_terry_and_haw_ai() {
         balance_after.haw_ai_terry,
         balance_before.haw_ai_terry + (config.terry_per_stake * config.haw_ai_percentage as i128 / 100)
     );
+}
+
+#[test]
+fn unstake_caps_at_max_power() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+
+    let mut config = generate_config(&e);
+    config.power_action_fee = 0;
+    config.stake_periods = vec![&e, 0];
+    config.stake_interest_percentages = vec![&e, 200];
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+
+    let mut metadata = create_metadata(&e);
+    metadata.initial_power = 1000;
+    metadata.max_power = 1000;
+    nft.create_metadata(&metadata, &1);
+
+    nft.create_user(&player);
+    nft.mint_terry(&player, &1000);
+    nft.mint(&player, &TokenId(1), &1, &Currency::Terry);
+
+    nft.stake(&player, &Category::Leader, &TokenId(1), &0);
+    nft.unstake(&player, &Category::Leader, &TokenId(1));
+
+    let card_after = nft.card(&player, &TokenId(1)).unwrap();
+    assert_eq!(card_after.power, metadata.max_power);
 }
 
 #[test]
@@ -349,6 +405,41 @@ fn test_fight_open_position() {
         &10,
         &1000,
     );
+}
+
+#[test]
+fn fight_close_caps_at_max_power() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+
+    let config = generate_config(&e);
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+
+    let mut metadata = create_metadata(&e);
+    metadata.token_id = 501;
+    metadata.category = Category::Leader;
+    metadata.initial_power = 1000;
+    metadata.max_power = 1100;
+    nft.create_metadata(&metadata, &501);
+
+    nft.create_user(&player);
+    nft.mint_terry(&player, &100000);
+    nft.mint(&player, &TokenId(501), &1, &Currency::Terry);
+
+    nft.open_position(
+        &player,
+        &Category::Leader,
+        &TokenId(501),
+        &fight::FightCurrency::BTC,
+        &fight::SidePosition::Long,
+        &100,
+        &100,
+    );
+
+    nft.close_position(&player, &Category::Leader, &TokenId(501));
+    let card_after = nft.card(&player, &TokenId(501)).unwrap();
+    assert_eq!(card_after.power, metadata.max_power);
 }
 
 #[test]
