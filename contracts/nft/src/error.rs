@@ -18,4 +18,6 @@ pub enum NFTError {
     RoundAlreadyProcessed = 2,
     NotAuthorized = 3,
     NoRewardsAvailable = 4,
+    PotTooLarge = 5,
+    PotInProgress = 6,
 }

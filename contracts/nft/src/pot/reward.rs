@@ -1,5 +1,6 @@
-use crate::admin::read_config;
-use crate::event::*;
+#![allow(dead_code)]
+
+use crate::event::emit_reward_claimed;
 use crate::pot::management::{
     get_all_rounds, read_player_reward, read_pot_snapshot, write_pending_reward,
 };
@@ -8,7 +9,7 @@ use crate::storage_types::{
     PendingReward, RewardClaim, RewardStatus, STORAGE_BUMP_LEDGERS,
     STORAGE_THRESHOLD_LEDGERS,
 };
-use crate::user_info::{read_user, write_user};
+use crate::user_info::update_user;
 use soroban_sdk::{Address, Env, Vec};
 
 const MIN_REWARD_AMOUNT: i128 = 1;
@@ -27,20 +28,15 @@ const MIN_REWARD_AMOUNT: i128 = 1;
 // }
 
 pub fn process_reward(e: &Env, player: &Address, reward: &PendingReward) -> RewardStatus {
-    let mut user = read_user(e, player.clone());
-    let _config = read_config(e);
-    let mut updated = false;
-    let final_status = RewardStatus::Claimed;
+    update_user(e, player.clone(), |_, user| {
+        if reward.terry_amount > MIN_REWARD_AMOUNT {
+            user.terry += reward.terry_amount;
+        }
 
-    if reward.terry_amount > MIN_REWARD_AMOUNT {
-        user.terry += reward.terry_amount;
-        updated = true;
-    }
-
-    if reward.power_amount > 0 {
-        user.power += reward.power_amount;
-        updated = true;
-    }
+        if reward.power_amount > 0 {
+            user.power += reward.power_amount;
+        }
+    });
 
     // if reward.xtar_amount > MIN_REWARD_AMOUNT {
     //     let xtar_token = token::Client::new(e, &config.xtar_token);
@@ -54,11 +50,7 @@ pub fn process_reward(e: &Env, player: &Address, reward: &PendingReward) -> Rewa
     //     }
     // }
 
-    if updated {
-        write_user(e, player.clone(), user);
-    }
-
-    final_status
+    RewardStatus::Claimed
 }
 
 pub fn claim_all_pending_rewards(e: Env, player: Address) {

@@ -1,16 +1,19 @@
 use crate::event::emit_burn;
-use crate::{user_info::mint_terry, *};
+use crate::*;
 use admin::read_config;
 use metadata::read_metadata;
 use nft_info::{read_nft, remove_nft, Action};
 use soroban_sdk::{Address, Env};
 use storage_types::TokenId;
-use user_info::{read_owner_card, read_user, write_owner_card, write_user};
+use user_info::{update_user, update_owner_cards};
 
 pub fn burn(env: Env, user: Address, token_id: TokenId) {
     user.require_auth();
-    let mut user = read_user(&env, user.clone());
-    let owner = user.owner.clone();
+    // We don't need read_user here anymore for the update logic, 
+    // but we need 'owner' address. Let's read just enough or use update_user pattern.
+    // read_user is cheap if cached, but let's just get owner from Address if possible? 
+    // No, 'user' is the address/owner.
+    let owner = user.clone();
 
     let config = read_config(&env);
     let nft = read_nft(&env, owner.clone(), token_id.clone()).unwrap();
@@ -25,10 +28,13 @@ pub fn burn(env: Env, user: Address, token_id: TokenId) {
     let receive_power = total_power as i128 * config.burn_receive_percentage as i128 / 100;
     let pot_power = total_power as i128 - receive_power;
 
-    // Mint owner's share
-    user.power += receive_power as u32;
-    write_user(&env.clone(), owner.clone(), user);
-    mint_terry(&env, owner.clone(), receive_amount);
+    // Mint owner's share (Atomic update of Power + Terry + Level)
+    update_user(&env, owner.clone(), |_, u| {
+        u.power += receive_power as u32;
+        u.terry += receive_amount;
+        u.total_history_terry += receive_amount;
+    });
+
     // Accumulate to pot with Dogstar fee deduction (internal helper, no admin auth)
     crate::pot::management::accumulate_pot_internal(
         &env,
@@ -48,8 +54,9 @@ pub fn burn(env: Env, user: Address, token_id: TokenId) {
 }
 
 pub fn remove_owner_card(env: &Env, owner: Address, token_id: TokenId) {
-    let mut user_card_ids = read_owner_card(&env, owner.clone());
-    let index = user_card_ids.iter().position(|x| x == token_id).unwrap();
-    user_card_ids.remove(index as u32);
-    write_owner_card(&env, owner.clone(), user_card_ids);
+    update_owner_cards(env, owner.clone(), |_, user_card_ids: &mut soroban_sdk::Vec<TokenId>| {
+        if let Some(index) = user_card_ids.iter().position(|x| x == token_id) {
+            user_card_ids.remove(index as u32);
+        }
+    });
 }

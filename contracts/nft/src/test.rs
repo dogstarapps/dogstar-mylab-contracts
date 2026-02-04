@@ -1,15 +1,19 @@
 #![cfg(test)]
+#![allow(deprecated)]
 
 use crate::nft_info::Card;
 use crate::storage_types::*;
 use crate::NFTClient;
 use crate::{
-    actions::fight,
+    actions::{deck, fight, FightCurrency, SidePosition},
     contract::NFT,
     metadata::CardMetadata,
     nft_info::{Action, Category, Currency},
     storage_types::TokenId,
 };
+use crate::user_info::read_user;
+use crate::admin::{read_total_effective_deck_power, write_total_effective_deck_power};
+
 use soroban_sdk::testutils::Events;
 use soroban_sdk::token::StellarAssetClient;
 
@@ -18,7 +22,7 @@ use crate::pot::management::accumulate_pot_internal;
 use soroban_sdk::symbol_short;
 use soroban_sdk::testutils::Ledger as _;
 use soroban_sdk::{log, testutils::Address as _, vec, Address, Env};
-use soroban_sdk::{token::TokenClient, String};
+use soroban_sdk::token::TokenClient;
 use soroban_sdk::{Symbol, TryFromVal};
 
 // Local copies of constants to avoid relying on private items
@@ -72,7 +76,7 @@ fn mint_token(e: &Env, token: Address, to: Address, amount: i128) {
     token_admin_client.mint(&to, &amount);
 }
 
-fn create_metadata(e: &Env) -> CardMetadata {
+fn create_metadata(_e: &Env) -> CardMetadata {
     let metadata = CardMetadata {
         initial_power: 1000,        // Set appropriate value
         max_power: 10000,           // Set appropriate value
@@ -113,6 +117,36 @@ fn reserve_factor_expected_range() {
     let p: u32 = 1000;
     let reserve = (p as u128) * k_fp / ((SCALE as u128) - k_fp);
     assert!(reserve >= 170 && reserve <= 185);
+}
+
+#[test]
+fn set_power_action_fee_updates_config() {
+    let (env, contract_id) = create_test_env();
+    let admin = Address::generate(&env);
+    let config = generate_config(&env);
+    let client = NFTClient::new(&env, &contract_id);
+    client.initialize(&admin, &config);
+
+    client.set_power_action_fee(&15);
+    let updated = client.config();
+    assert_eq!(updated.power_action_fee, 15);
+}
+
+#[test]
+fn set_stake_params_updates_config() {
+    let (env, contract_id) = create_test_env();
+    let admin = Address::generate(&env);
+    let config = generate_config(&env);
+    let client = NFTClient::new(&env, &contract_id);
+    client.initialize(&admin, &config);
+
+    let new_periods = vec![&env, 100u32, 200u32];
+    let new_interests = vec![&env, 3u32, 5u32];
+    client.set_stake_params(&new_periods, &new_interests);
+
+    let updated = client.config();
+    assert_eq!(updated.stake_periods, new_periods);
+    assert_eq!(updated.stake_interest_percentages, new_interests);
 }
 
 #[test]
@@ -243,6 +277,95 @@ fn test_add_power() {
 }
 
 #[test]
+fn add_power_caps_at_max_power() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+
+    let mut config = generate_config(&e);
+    let xtar_token = e.register_stellar_asset_contract(admin.clone());
+    config.xtar_token = xtar_token.clone();
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+
+    nft.create_user(&player);
+    nft.mint_terry(&player, &1000);
+
+    let mut metadata = create_metadata(&e);
+    metadata.max_power = 1005;
+    metadata.initial_power = 1000;
+    nft.create_metadata(&metadata, &1);
+    nft.mint(&player, &TokenId(1), &1, &Currency::Terry);
+
+    // Add enough power to exceed max_power
+    let amount: u32 = 100;
+    nft.add_power_to_card(&player, &1, &amount);
+
+    let card = nft.card(&player, &TokenId(1)).unwrap();
+    assert_eq!(card.power, metadata.max_power);
+}
+
+#[test]
+fn stake_mints_terry_and_haw_ai() {
+    let (e, contract_id) = create_test_env();
+
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+
+    let config = generate_config(&e);
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+
+    let metadata = create_metadata(&e);
+    nft.create_metadata(&metadata, &1);
+    nft.create_user(&player);
+
+    // Ensure player can mint the NFT with Terry
+    nft.mint_terry(&player, &1000);
+    nft.mint(&player, &TokenId(1), &1, &Currency::Terry);
+
+    let terry_before = nft.terry_balance(&player);
+    let balance_before = nft.admin_balance();
+
+    nft.stake(&player, &Category::Leader, &TokenId(1), &0);
+
+    let terry_after = nft.terry_balance(&player);
+    let balance_after = nft.admin_balance();
+
+    assert_eq!(terry_after, terry_before + config.terry_per_stake);
+    assert_eq!(
+        balance_after.haw_ai_terry,
+        balance_before.haw_ai_terry + (config.terry_per_stake * config.haw_ai_percentage as i128 / 100)
+    );
+}
+
+#[test]
+fn unstake_caps_at_max_power() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+
+    let mut config = generate_config(&e);
+    config.power_action_fee = 0;
+    config.stake_periods = vec![&e, 0];
+    config.stake_interest_percentages = vec![&e, 200];
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+
+    let mut metadata = create_metadata(&e);
+    metadata.initial_power = 1000;
+    metadata.max_power = 1000;
+    nft.create_metadata(&metadata, &1);
+
+    nft.create_user(&player);
+    nft.mint_terry(&player, &1000);
+    nft.mint(&player, &TokenId(1), &1, &Currency::Terry);
+
+    nft.stake(&player, &Category::Leader, &TokenId(1), &0);
+    nft.unstake(&player, &Category::Leader, &TokenId(1));
+
+    let card_after = nft.card(&player, &TokenId(1)).unwrap();
+    assert_eq!(card_after.power, metadata.max_power);
+}
+
+#[test]
 fn test_fight_open_position() {
     let (e, contract_id) = create_test_env();
 
@@ -282,6 +405,41 @@ fn test_fight_open_position() {
         &10,
         &1000,
     );
+}
+
+#[test]
+fn fight_close_caps_at_max_power() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+
+    let config = generate_config(&e);
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+
+    let mut metadata = create_metadata(&e);
+    metadata.token_id = 501;
+    metadata.category = Category::Leader;
+    metadata.initial_power = 1000;
+    metadata.max_power = 1100;
+    nft.create_metadata(&metadata, &501);
+
+    nft.create_user(&player);
+    nft.mint_terry(&player, &100000);
+    nft.mint(&player, &TokenId(501), &1, &Currency::Terry);
+
+    nft.open_position(
+        &player,
+        &Category::Leader,
+        &TokenId(501),
+        &fight::FightCurrency::BTC,
+        &fight::SidePosition::Long,
+        &100,
+        &100,
+    );
+
+    nft.close_position(&player, &Category::Leader, &TokenId(501));
+    let card_after = nft.card(&player, &TokenId(501)).unwrap();
+    assert_eq!(card_after.power, metadata.max_power);
 }
 
 #[test]
@@ -375,6 +533,88 @@ fn test_deck() {
     assert_eq!(deck1.bonus, 0);
     assert_eq!(deck1.total_power, 0);
     assert_eq!(deck1.token_ids.len(), 2);
+}
+
+
+#[test]
+fn lending_interest_goes_to_card_power() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let config = generate_config(&e);
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+
+    let lender = Address::generate(&e);
+    let borrower = Address::generate(&e);
+    nft.create_user(&lender);
+    nft.create_user(&borrower);
+
+    let mut md_l = create_metadata(&e);
+    md_l.token_id = 9001;
+    md_l.category = Category::Resource;
+    md_l.initial_power = 5_000;
+    md_l.max_power = 50_000;
+    let mut md_b = create_metadata(&e);
+    md_b.token_id = 9002;
+    md_b.category = Category::Resource;
+    md_b.initial_power = 5_000;
+    md_b.max_power = 50_000;
+    nft.create_metadata(&md_l, &9001);
+    nft.create_metadata(&md_b, &9002);
+    // Provide Terry so mint with Currency::Terry succeeds
+    nft.mint_terry(&lender, &100_000);
+    nft.mint_terry(&borrower, &100_000);
+    nft.mint(&lender, &TokenId(9001), &1, &Currency::Terry);
+    nft.mint(&borrower, &TokenId(9002), &1, &Currency::Terry);
+
+    // Lend and borrow
+    nft.lend(&lender, &Category::Resource, &TokenId(9001), &1_000);
+    nft.borrow(&borrower, &Category::Resource, &TokenId(9002), &800);
+
+    // Backdate lending to accumulate interest
+    e.as_contract(&contract_id, || {
+        let mut lending = crate::actions::lending::read_lending(
+            e.clone(),
+            lender.clone(),
+            Category::Resource,
+            TokenId(9001),
+        );
+        lending.lent_at = lending.lent_at.saturating_sub(3_600);
+        let key = crate::storage_types::DataKey::Lending(
+            lender.clone(),
+            Category::Resource,
+            TokenId(9001),
+        );
+        e.storage().persistent().set(&key, &lending);
+    });
+
+    // Advance time to accrue interest
+    let mut li = e.ledger().get();
+    li.timestamp += 3_600;
+    e.ledger().set(li);
+
+    // Ensure pool has liquidity and interest to pay out
+    e.as_contract(&contract_id, || {
+        let mut st = crate::admin::read_state(&e);
+        st.total_interest = 1_000_000;
+        st.total_offer = st.total_offer.saturating_add(10_000);
+        if st.w_total == 0 {
+            st.w_total = 10;
+        }
+        crate::admin::write_state(&e, &st);
+    });
+
+    // Capture powers before
+    let card_before = nft.card(&lender, &TokenId(9001)).unwrap();
+    let user_before = nft.read_user(&lender);
+
+    nft.withdraw(&lender, &Category::Resource, &TokenId(9001));
+
+    let card_after = nft.card(&lender, &TokenId(9001)).unwrap();
+    let user_after = nft.read_user(&lender);
+
+    // Principal + interest must be on the card; user.power should not increase from interest
+    assert!(card_after.power > card_before.power); // gained interest
+    assert_eq!(user_after.power, user_before.power); // interest not routed to user.power
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -637,7 +877,7 @@ fn test_accumulate_pot() {
     assert_eq!(dogstar_balance.xtar, xtar * fee_percentage / 10000); // 5% = 100
 
     // Verify event
-    let events = e.events().all();
+    let _events = e.events().all();
 
     // assert_eq!(
     //     events,
@@ -942,7 +1182,7 @@ fn lb_e2e_lend_borrow_repay_withdraw_basic() {
     let admin = Address::generate(&e);
     let lender = Address::generate(&e);
     let borrower = Address::generate(&e);
-    let mut config = generate_config(&e);
+    let config = generate_config(&e);
 
     // Initialize contract
     let nft = create_nft(e.clone(), &contract_id, &admin, &config);
@@ -1006,12 +1246,262 @@ fn lb_e2e_lend_borrow_repay_withdraw_basic() {
 }
 
 #[test]
+fn lb_repay_can_use_collateral_power() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let lender = Address::generate(&e);
+    let borrower = Address::generate(&e);
+    let config = generate_config(&e);
+
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+
+    nft.create_user(&lender);
+    nft.create_user(&borrower);
+    nft.mint_terry(&lender, &100000);
+    nft.mint_terry(&borrower, &100000);
+
+    let mut md_l = create_metadata(&e);
+    md_l.token_id = 501;
+    md_l.category = Category::Resource;
+    md_l.initial_power = 1000;
+    md_l.max_power = 20000;
+    let mut md_b = create_metadata(&e);
+    md_b.token_id = 601;
+    md_b.category = Category::Resource;
+    md_b.initial_power = 10000;
+    md_b.max_power = 20000;
+
+    nft.create_metadata(&md_l, &501);
+    nft.create_metadata(&md_b, &601);
+
+    nft.mint(&lender, &TokenId(501), &1, &Currency::Terry);
+    nft.mint(&borrower, &TokenId(601), &1, &Currency::Terry);
+
+    // Provide liquidity and borrow
+    nft.lend(&lender, &Category::Resource, &TokenId(501), &200);
+    nft.borrow(&borrower, &Category::Resource, &TokenId(601), &200);
+
+    // Simulate user spending all POWER by zeroing it directly
+    e.as_contract(&contract_id, || {
+        let key = DataKey::User(borrower.clone());
+        let mut user: User = e.storage().persistent().get(&key).unwrap();
+        user.power = 0;
+        e.storage().persistent().set(&key, &user);
+    });
+
+    let quote = nft.repay_quote(&borrower, &Category::Resource, &TokenId(601));
+    let required = quote.required_power;
+    assert!(quote.user_power < required);
+    assert!(quote.total_available >= required);
+
+    let card_before = nft.card(&borrower, &TokenId(601)).unwrap();
+    nft.repay(&borrower, &Category::Resource, &TokenId(601));
+    let card_after = nft.card(&borrower, &TokenId(601)).unwrap();
+
+    assert_eq!(card_after.locked_by_action, crate::nft_info::Action::None);
+    assert_eq!(card_after.power, card_before.power - required);
+}
+
+#[test]
+fn deck_index_removed_when_empty() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+    let config = generate_config(&e);
+
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+    nft.set_pages_only_mode(&true);
+
+    nft.create_user(&player);
+    nft.mint_terry(&player, &100000);
+
+    let mut md = create_metadata(&e);
+    md.token_id = 9001;
+    md.category = Category::Leader;
+    md.initial_power = 1000;
+    md.max_power = 20000;
+    nft.create_metadata(&md, &9001);
+
+    nft.mint(&player, &TokenId(9001), &1, &Currency::Terry);
+
+    nft.place(&player, &TokenId(9001));
+    assert_eq!(nft.read_decks_count(), 1);
+
+    nft.remove_place(&player, &TokenId(9001));
+    assert_eq!(nft.read_decks_count(), 0);
+
+    e.as_contract(&contract_id, || {
+        let pos_key = DataKey::Pos(PagedPosKind::Decks, player.clone(), Category::Leader, TokenId(0));
+        assert!(!e.storage().persistent().has(&pos_key));
+    });
+}
+
+#[test]
+fn pages_only_skips_legacy_decks() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+    let config = generate_config(&e);
+
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+    nft.set_pages_only_mode(&true);
+
+    nft.create_user(&player);
+    nft.mint_terry(&player, &100000);
+
+    let mut md = create_metadata(&e);
+    md.token_id = 9301;
+    md.category = Category::Leader;
+    md.initial_power = 1000;
+    md.max_power = 20000;
+    nft.create_metadata(&md, &9301);
+
+    nft.mint(&player, &TokenId(9301), &1, &Currency::Terry);
+    nft.place(&player, &TokenId(9301));
+
+    e.as_contract(&contract_id, || {
+        assert!(!e.storage().persistent().has(&DataKey::Decks));
+    });
+}
+
+#[test]
+fn deck_swap_remove_updates_index() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player1 = Address::generate(&e);
+    let player2 = Address::generate(&e);
+    let config = generate_config(&e);
+
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+    nft.set_pages_only_mode(&true);
+
+    nft.create_user(&player1);
+    nft.create_user(&player2);
+    nft.mint_terry(&player1, &100000);
+    nft.mint_terry(&player2, &100000);
+
+    let mut md1 = create_metadata(&e);
+    md1.token_id = 9201;
+    md1.category = Category::Leader;
+    md1.initial_power = 1000;
+    md1.max_power = 20000;
+    nft.create_metadata(&md1, &9201);
+
+    let mut md2 = create_metadata(&e);
+    md2.token_id = 9202;
+    md2.category = Category::Leader;
+    md2.initial_power = 1000;
+    md2.max_power = 20000;
+    nft.create_metadata(&md2, &9202);
+
+    nft.mint(&player1, &TokenId(9201), &1, &Currency::Terry);
+    nft.mint(&player2, &TokenId(9202), &1, &Currency::Terry);
+
+    nft.place(&player1, &TokenId(9201));
+    nft.place(&player2, &TokenId(9202));
+    assert_eq!(nft.read_decks_count(), 2);
+
+    nft.remove_place(&player1, &TokenId(9201));
+    assert_eq!(nft.read_decks_count(), 1);
+
+    e.as_contract(&contract_id, || {
+        let page = deck::read_decks_page(&e, 0, 10);
+        assert_eq!(page.len(), 1);
+        let remaining = page.get(0).unwrap();
+        assert_eq!(remaining.owner, player2);
+
+        let pos_key1 =
+            DataKey::Pos(PagedPosKind::Decks, player1.clone(), Category::Leader, TokenId(0));
+        assert!(!e.storage().persistent().has(&pos_key1));
+
+        let pos_key2 =
+            DataKey::Pos(PagedPosKind::Decks, player2.clone(), Category::Leader, TokenId(0));
+        let pos: u32 = e.storage().persistent().get(&pos_key2).unwrap();
+        assert_eq!(pos, 0);
+    });
+}
+
+#[test]
+fn force_reset_pot_resets_cursor_and_status() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+    let config = generate_config(&e);
+
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+    nft.create_user(&player);
+    nft.mint_terry(&player, &100000);
+
+    let mut md = create_metadata(&e);
+    md.token_id = 9101;
+    md.category = Category::Leader;
+    md.initial_power = 1000;
+    md.max_power = 20000;
+    nft.create_metadata(&md, &9101);
+    nft.mint(&player, &TokenId(9101), &1, &Currency::Terry);
+    nft.place(&player, &TokenId(9101));
+
+    nft.open_pot_start(&1);
+    // Advance cursor once
+    nft.open_pot_process_totals(&1, &1);
+
+    // Reset
+    nft.force_reset_pot(&1);
+    let status = nft.get_pot_status(&1);
+    let cursor = nft.get_pot_cursor(&1);
+    assert_eq!(status, PotStatus::Totals);
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn rebuild_total_effective_deck_power_batch() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+    let config = generate_config(&e);
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+
+    nft.set_pages_only_mode(&true);
+    nft.create_user(&player);
+    nft.mint_terry(&player, &100000);
+
+    // Mint 4 cards and complete deck
+    for i in 0..4 {
+        let mut md = create_metadata(&e);
+        md.token_id = 9200 + i;
+        md.category = Category::Leader;
+        md.initial_power = 1000;
+        md.max_power = 20000;
+        nft.create_metadata(&md, &(9200 + i));
+        nft.mint(&player, &TokenId(9200 + i), &1, &Currency::Terry);
+        nft.place(&player, &TokenId(9200 + i));
+    }
+
+    // Simulate legacy state: total effective power missing
+    e.as_contract(&contract_id, || {
+        write_total_effective_deck_power(&e, 0);
+    });
+
+    let before = e.as_contract(&contract_id, || read_total_effective_deck_power(&e));
+    assert_eq!(before, 0);
+
+    let next = nft.rebuild_deck_effective(&0, &50);
+    assert!(next > 0);
+
+    let after = e.as_contract(&contract_id, || read_total_effective_deck_power(&e));
+    assert!(after > 0);
+
+    let deck = nft.read_deck(&player);
+    assert!(deck.haw_ai_percentage > 0);
+}
+
+#[test]
 #[should_panic(expected = "Invalid borrow: zero")]
 fn lb_borrow_zero_disallowed() {
     let (e, contract_id) = create_test_env();
     let admin = Address::generate(&e);
     let user = Address::generate(&e);
-    let mut config = generate_config(&e);
+    let config = generate_config(&e);
     let nft = create_nft(e.clone(), &contract_id, &admin, &config);
 
     // User with card
@@ -1036,7 +1526,7 @@ fn lb_borrow_exceeds_pool() {
     let admin = Address::generate(&e);
     let lender = Address::generate(&e);
     let borrower = Address::generate(&e);
-    let mut config = generate_config(&e);
+    let config = generate_config(&e);
     let nft = create_nft(e.clone(), &contract_id, &admin, &config);
 
     // Users and TERRY
@@ -1101,10 +1591,11 @@ fn lb_borrow_quote_insufficient_pool() {
     // Provide small liquidity (~99 net)
     nft.lend(&lender, &Category::Resource, &TokenId(901), &100);
 
-    // Request 200 gross (~198 net) > pool (~99 net)
+    // Request 200 gross (~198 net) > pool (~99 net) -> se capa al neto disponible
     let quote = nft.borrow_quote(&borrower, &Category::Resource, &TokenId(902), &200);
-    assert!(!quote.allowed);
-    assert_eq!(quote.reason, 2);
+    assert!(quote.allowed);
+    assert!(quote.borrow_net <= 100 && quote.borrow_net >= 99);
+    assert_eq!(quote.reason, 0);
 }
 
 #[test]
@@ -1339,7 +1830,7 @@ fn lb_touch_loans_total_haircut_and_ownership_loss() {
 }
 
 #[test]
-fn apy_edge_case_S_zero_capped() {
+fn apy_edge_case_s_zero_capped() {
     // total_offer = 0 scenario -> utilization clamps to 1, APY capped at APY_MAX
     let apy = calculate_apy(10_000, 0, 0, 0, SCALE / 2);
     assert!(apy <= APY_MAX);
@@ -1488,6 +1979,9 @@ fn lb_withdraw_emits_index_updated() {
         "expected idx_upd event on withdraw with deficit and active loans"
     );
 }
+
+
+
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // FAILING TESTS //
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1691,3 +2185,130 @@ fn lb_withdraw_emits_index_updated() {
 //     //     .unwrap();
 //     // assert_eq!(withdrawn.1, vec![&e, 50_i128, 2_u32, 100_i128]);
 // }
+
+#[test]
+fn fight_close_applies_partial_loss() {
+    use crate::storage_types::DataKey;
+
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+    let nft = create_nft(e.clone(), &contract_id, &admin, &generate_config(&e));
+
+    nft.create_user(&player);
+    nft.mint_terry(&player, &100000);
+
+    // Metadata and mint
+    let mut md = create_metadata(&e);
+    md.token_id = 501;
+    md.category = Category::Skill;
+    md.initial_power = 1000;
+    md.max_power = 2000;
+    nft.create_metadata(&md, &501);
+    nft.mint(&player, &TokenId(501), &1, &Currency::Terry);
+
+    // Open position Long (tests: trigger_price=1000, current_price=86000 => profit)
+    nft.open_position(
+        &player,
+        &Category::Skill,
+        &TokenId(501),
+        &FightCurrency::BTC,
+        &SidePosition::Long,
+        &1,
+        &500,
+    );
+
+    // Force a higher trigger_price to yield partial loss on close
+    e.as_contract(&contract_id, || {
+        let owner = read_user(&e, player.clone()).owner;
+        let key = DataKey::Fight(owner.clone(), Category::Skill, TokenId(501));
+        let mut fight = e
+            .storage()
+            .persistent()
+            .get::<_, crate::actions::fight::Fight>(&key)
+            .unwrap();
+        // current_price (test) = 86000; set trigger slightly above to get pnl negativo parcial
+        fight.trigger_price = 88_000;
+        e.storage().persistent().set(&key, &fight);
+    });
+
+    let card_before = nft.card(&player, &TokenId(501)).unwrap();
+    let power_before = card_before.power;
+
+    nft.close_position(&player, &Category::Skill, &TokenId(501));
+    let card_after = nft.card(&player, &TokenId(501)).unwrap();
+
+    // Partial loss: final power must be below stake return, but above zero
+    assert!(card_after.power < power_before + 500);
+    assert!(card_after.power > 0);
+}
+
+#[test]
+fn deck_replace_does_not_inflate_total_power() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+    let config = generate_config(&e);
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+
+    nft.create_user(&player);
+    nft.mint_terry(&player, &100000);
+
+    // Create 6 cards: four for initial deck, one same-power, one higher-power
+    for (token_id, power) in [
+        (101, 1000),
+        (102, 1000),
+        (103, 1000),
+        (104, 1000),
+        (105, 1000),
+        (106, 1200),
+    ] {
+        let mut md = create_metadata(&e);
+        md.token_id = token_id;
+        md.initial_power = power;
+        md.max_power = power + 1000;
+        nft.create_metadata(&md, &token_id);
+        nft.mint(&player, &TokenId(token_id), &1, &Currency::Terry);
+    }
+
+    nft.place(&player, &TokenId(101));
+    nft.place(&player, &TokenId(102));
+    nft.place(&player, &TokenId(103));
+    nft.place(&player, &TokenId(104));
+
+    let balance = nft.admin_balance();
+    assert_eq!(balance.total_deck_power, 4000);
+
+    // Replace with same power, total_deck_power must remain unchanged
+    nft.replace(&player, &TokenId(101), &TokenId(105));
+    let balance_after = nft.admin_balance();
+    assert_eq!(balance_after.total_deck_power, 4000);
+
+    // Replace with higher power (+200)
+    nft.replace(&player, &TokenId(102), &TokenId(106));
+    let balance_after_upgrade = nft.admin_balance();
+    assert_eq!(balance_after_upgrade.total_deck_power, 4200);
+}
+
+#[test]
+fn add_card_to_owner_dedupes() {
+    let (e, contract_id) = create_test_env();
+    let admin = Address::generate(&e);
+    let player = Address::generate(&e);
+    let config = generate_config(&e);
+    let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+
+    nft.create_user(&player);
+
+    e.as_contract(&contract_id, || {
+        let card = Card {
+            power: 100,
+            locked_by_action: Action::None,
+        };
+        crate::nft_info::write_nft(&e, player.clone(), TokenId(999), card);
+        crate::user_info::add_card_to_owner(&e, TokenId(999), player.clone()).unwrap();
+        crate::user_info::add_card_to_owner(&e, TokenId(999), player.clone()).unwrap();
+        let cards = crate::user_info::read_owner_card(&e, player.clone());
+        assert_eq!(cards.len(), 1);
+    });
+}

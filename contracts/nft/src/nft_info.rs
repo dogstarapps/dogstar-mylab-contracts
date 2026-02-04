@@ -2,7 +2,7 @@ use soroban_sdk::{contracttype, log, Address, Env};
 
 use crate::storage_types::{DataKey, TokenId, STORAGE_BUMP_LEDGERS, STORAGE_THRESHOLD_LEDGERS};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[contracttype]
 pub enum Category {
     Leader,
@@ -58,7 +58,7 @@ impl CardInfo {
     }
 }
 
-pub fn write_nft(env: &Env, owner: Address, token_id: TokenId, card: Card) {
+pub(crate) fn write_nft(env: &Env, owner: Address, token_id: TokenId, card: Card) {
     log!(
         &env,
         "write_nft >> Write nft for {}, token id {}",
@@ -97,7 +97,19 @@ pub fn exists(env: &Env, owner: Address, token_id: TokenId) -> bool {
     env.storage().persistent().has(&key)
 }
 
-pub fn remove_nft(env: &Env, owner: Address, token_id: TokenId) {
+pub(crate) fn remove_nft(env: &Env, owner: Address, token_id: TokenId) {
     let key = DataKey::Card(owner, token_id.clone());
     env.storage().persistent().remove(&key);
+}
+
+
+// GUARDRAIL: Single-writer helper for NFTs
+pub fn update_nft<F>(env: &Env, owner: Address, token_id: TokenId, f: F)
+where
+    F: FnOnce(&Env, &mut Card),
+{
+    let mut card = read_nft(env, owner.clone(), token_id.clone())
+        .expect("NFT not found for update");
+    f(env, &mut card);
+    write_nft(env, owner, token_id, card);
 }
