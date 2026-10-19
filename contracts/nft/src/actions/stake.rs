@@ -408,9 +408,14 @@ pub fn stake(env: Env, user: Address, category: Category, token_id: TokenId, per
         card.power = 0;
     });
 
-    update_balance(&env, |_, balance| {
-        balance.haw_ai_power += power_fee;
-    });
+    crate::pot::management::accumulate_pot_internal(
+        &env,
+        0,
+        power_fee,
+        0,
+        Some(owner.clone()),
+        Some(Action::Stake),
+    );
 
     let stake_period = config.stake_periods.get(period_index).unwrap();
     let stake_interest = config.stake_interest_percentages.get(period_index).unwrap();
@@ -499,9 +504,14 @@ pub fn increase_stake_power(
             .expect("Insufficient NFT power");
     });
 
-    update_balance(&env, |_, balance| {
-        balance.haw_ai_power += power_fee;
-    });
+    crate::pot::management::accumulate_pot_internal(
+        &env,
+        0,
+        power_fee,
+        0,
+        Some(owner.clone()),
+        Some(Action::Stake),
+    );
 
     write_stake(
         &env,

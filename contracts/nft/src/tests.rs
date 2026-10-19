@@ -3,8 +3,8 @@
 use super::*;
 use crate::contract::NFT;
 use crate::pot::management::{
-    add_round, get_current_round, get_rounds_count, read_pot_cursor, read_pot_snapshot,
-    read_pot_status, read_user_generic_claimable,
+    add_round, calculate_share_percentage, get_current_round, get_rounds_count, read_pot_cursor,
+    read_pot_snapshot, read_pot_status, read_user_generic_claimable,
 };
 use crate::storage_types::{
     Config, DataKey, Deck, FightKey, LendingKey, BorrowingKey, PagedListKind, PagedPosKind,
@@ -901,6 +901,35 @@ fn open_pot_multi_step_resumable() {
         assert_eq!(read_pot_status(&e, round), PotStatus::Finalized);
         assert_eq!(get_current_round(&e), round);
     });
+}
+
+#[test]
+fn share_percentage_handles_power_above_u32_multiplication_threshold() {
+    assert_eq!(calculate_share_percentage(500_500, 953_333), 5_250);
+}
+
+#[test]
+fn open_pot_process_shares_handles_500_500_power() {
+    let e = Env::default();
+    let (nft_addr, _xtar_token, _generic_token) = init_contract(&e);
+    let p1 = <Address as TestAddress>::generate(&e);
+    let p2 = <Address as TestAddress>::generate(&e);
+    write_decks(
+        &e,
+        &nft_addr,
+        &[(p1.clone(), 500_500), (p2.clone(), 452_833)],
+        0,
+    );
+
+    let client = NFTClient::new(&e, &nft_addr);
+    let round = 1u32;
+    client.open_pot_start(&round);
+    assert_eq!(client.open_pot_process_totals(&round, &2), 2);
+    assert_eq!(client.open_pot_process_shares(&round, &2), 2);
+
+    let reward = client.get_player_participation(&p1, &round).unwrap();
+    assert_eq!(reward.effective_power, 500_500);
+    assert_eq!(reward.share_percentage, 5_250);
 }
 
 #[test]
