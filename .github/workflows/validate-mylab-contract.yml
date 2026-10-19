@@ -1,0 +1,43 @@
+name: Validate MyLab contract
+
+on:
+  push:
+    branches:
+      - fix/haw-ai-power-fees
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install nightly-2025-11-17 --profile minimal --target wasm32v1-none
+
+      - name: Run contract tests
+        run: cargo +nightly-2025-11-17 test --workspace --locked
+
+      - name: Install Stellar CLI
+        run: cargo +nightly-2025-11-17 install --locked stellar-cli --version 26.1.0 --features additional-libs
+
+      - name: Build optimized contract
+        run: stellar contract build --locked --package soroban-nft-contract --optimize
+
+      - name: Record artifact hash
+        run: sha256sum target/wasm32v1-none/release/soroban_nft_contract.optimized.wasm | tee target/wasm32v1-none/release/soroban_nft_contract.optimized.wasm.sha256
+
+      - name: Upload validated contract
+        uses: actions/upload-artifact@v4
+        with:
+          name: soroban-nft-contract-${{ github.sha }}
+          path: |
+            target/wasm32v1-none/release/soroban_nft_contract.optimized.wasm
+            target/wasm32v1-none/release/soroban_nft_contract.optimized.wasm.sha256
+          if-no-files-found: error
+          retention-days: 14

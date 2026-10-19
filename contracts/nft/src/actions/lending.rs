@@ -872,9 +872,14 @@ pub fn lend(env: Env, user: Address, category: Category, token_id: TokenId, powe
         card.locked_by_action = Action::Lend;
     });
 
-    update_balance(&env, |_, balance| {
-        balance.haw_ai_power += power_fee;
-    });
+    crate::pot::management::accumulate_pot_internal(
+        &env,
+        0,
+        power_fee,
+        0,
+        Some(owner.clone()),
+        Some(Action::Lend),
+    );
 
     update_state(&env, |_, state| {
         state.total_offer += lend_amount as u64; // principal_net supplied to pool
@@ -998,9 +1003,14 @@ pub fn borrow(env: Env, user: Address, category: Category, token_id: TokenId, po
         card.power = card.power.saturating_sub(power_fee);
     });
 
-    update_balance(&env, |_, balance| {
-        balance.haw_ai_power += power_fee;
-    });
+    crate::pot::management::accumulate_pot_internal(
+        &env,
+        0,
+        power_fee,
+        0,
+        Some(owner.clone()),
+        Some(Action::Borrow),
+    );
 
     update_user(&env, owner.clone(), |_, user| {
         user.power += borrow_amount;
@@ -1548,8 +1558,16 @@ pub fn withdraw(env: Env, user: Address, category: Category, token_id: TokenId) 
     let config = read_config(&env);
     mint_terry(&env, owner.clone(), config.terry_per_lending);
 
+    crate::pot::management::accumulate_pot_internal(
+        &env,
+        0,
+        power_fee,
+        0,
+        Some(owner.clone()),
+        Some(Action::Lend),
+    );
+
     update_balance(&env, |_, balance| {
-        balance.haw_ai_power += power_fee;
         balance.haw_ai_terry += config.terry_per_lending * config.haw_ai_percentage as i128 / 100;
     });
 }

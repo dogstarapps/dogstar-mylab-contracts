@@ -193,6 +193,59 @@ fn test_initialize_success() {
 }
 
 #[test]
+fn create_user_is_idempotent() {
+    let (env, contract_id) = create_test_env();
+    let admin = Address::generate(&env);
+    let player = Address::generate(&env);
+    let config = generate_config(&env);
+    let client = create_nft(env, &contract_id, &admin, &config);
+
+    client.create_user(&player);
+    client.mint_terry(&player, &100_000);
+    let before = client.read_user(&player);
+
+    client.create_user(&player);
+
+    assert_eq!(client.read_user(&player), before);
+}
+
+#[test]
+fn restore_user_rebuilds_full_state() {
+    let (env, contract_id) = create_test_env();
+    let admin = Address::generate(&env);
+    let player = Address::generate(&env);
+    let config = generate_config(&env);
+    let client = create_nft(env, &contract_id, &admin, &config);
+
+    client.create_user(&player);
+    client.mint_terry(&player, &500);
+    client.restore_user(&player, &100, &500, &500, &48, &9_200_199, &47_105_199);
+
+    let restored = client.read_user(&player);
+    assert_eq!(restored.owner, player);
+    assert_eq!(restored.power, 48);
+    assert_eq!(restored.terry, 9_200_199);
+    assert_eq!(restored.total_history_terry, 47_105_199);
+    assert_eq!(restored.level, 10);
+}
+
+#[test]
+fn restore_user_rejects_stale_state() {
+    let (env, contract_id) = create_test_env();
+    let admin = Address::generate(&env);
+    let player = Address::generate(&env);
+    let config = generate_config(&env);
+    let client = create_nft(env, &contract_id, &admin, &config);
+
+    client.create_user(&player);
+    client.mint_terry(&player, &500);
+    let result = client.try_restore_user(&player, &100, &499, &500, &48, &9_200_199, &47_105_199);
+
+    assert!(result.is_err());
+    assert_eq!(client.read_user(&player).terry, 500);
+}
+
+#[test]
 fn test_mint() {
     let (e, contract_id) = create_test_env();
 
@@ -324,13 +377,22 @@ fn stake_mints_terry_and_haw_ai() {
 
     let terry_before = nft.terry_balance(&player);
     let balance_before = nft.admin_balance();
+    let pot_before = nft.get_current_pot_state().0;
 
     nft.stake(&player, &Category::Leader, &TokenId(1), &0);
 
     let terry_after = nft.terry_balance(&player);
     let balance_after = nft.admin_balance();
+    let pot_after = nft.get_current_pot_state().0;
+    let power_fee = config.power_action_fee * metadata.initial_power / 100;
+    let dogstar_fee = power_fee * config.dogstar_fee_percentage / 10_000;
 
     assert_eq!(terry_after, terry_before + config.terry_per_stake);
+    assert_eq!(balance_after.haw_ai_power, balance_before.haw_ai_power);
+    assert_eq!(
+        pot_after.accumulated_power,
+        pot_before.accumulated_power + power_fee - dogstar_fee
+    );
     assert_eq!(
         balance_after.haw_ai_terry,
         balance_before.haw_ai_terry + (config.terry_per_stake * config.haw_ai_percentage as i128 / 100)
@@ -589,7 +651,7 @@ fn lending_interest_goes_to_card_power() {
 
     // Advance time to accrue interest
     let mut li = e.ledger().get();
-    li.timestamp += 3_600;
+    li.timestamp += 31_536_000;
     e.ledger().set(li);
 
     // Ensure pool has liquidity and interest to pay out
@@ -603,18 +665,24 @@ fn lending_interest_goes_to_card_power() {
         crate::admin::write_state(&e, &st);
     });
 
+    // Make the interest fee large enough to survive integer rounding.
+    nft.set_power_action_fee(&10);
+
     // Capture powers before
     let card_before = nft.card(&lender, &TokenId(9001)).unwrap();
     let user_before = nft.read_user(&lender);
+    let pot_before = nft.get_current_pot_state().0;
 
     nft.withdraw(&lender, &Category::Resource, &TokenId(9001));
 
     let card_after = nft.card(&lender, &TokenId(9001)).unwrap();
     let user_after = nft.read_user(&lender);
+    let pot_after = nft.get_current_pot_state().0;
 
     // Principal + interest must be on the card; user.power should not increase from interest
     assert!(card_after.power > card_before.power); // gained interest
     assert_eq!(user_after.power, user_before.power); // interest not routed to user.power
+    assert!(pot_after.accumulated_power > pot_before.accumulated_power);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1218,12 +1286,14 @@ fn lb_e2e_lend_borrow_repay_withdraw_basic() {
     nft.lend(&lender, &Category::Resource, &TokenId(101), &200);
     let lending = nft.read_lending(&lender, &Category::Resource, &TokenId(101));
     assert_eq!(lending.power, 198);
+    assert_eq!(nft.get_current_pot_state().0.accumulated_power, 2);
 
     // Borrower borrows 200 POWER (1% fee -> 2; 198 credited to user)
     let user_before = nft.read_user(&borrower);
     nft.borrow(&borrower, &Category::Resource, &TokenId(201), &200);
     let user_after = nft.read_user(&borrower);
     assert_eq!(user_after.power, user_before.power + 198);
+    assert_eq!(nft.get_current_pot_state().0.accumulated_power, 4);
 
     // Repay immediately (zero interest path)
     nft.repay(&borrower, &Category::Resource, &TokenId(201));

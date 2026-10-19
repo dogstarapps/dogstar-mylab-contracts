@@ -17,6 +17,15 @@ pub fn calculate_effective_power(base_power: u32, deck_bonus: u32) -> u32 {
     ((base.saturating_mul(bonus)) / 100) as u32
 }
 
+/// Calculates a player's share in basis points without overflowing `u32`.
+pub fn calculate_share_percentage(effective_power: u32, total_effective_power: u32) -> u32 {
+    if total_effective_power == 0 {
+        return 0;
+    }
+
+    ((u64::from(effective_power) * 10_000) / u64::from(total_effective_power)) as u32
+}
+
 // Pot Balance Management
 pub fn read_pot_balance(env: &Env) -> PotBalance {
     let key = DataKey::PotBalance;
@@ -726,12 +735,15 @@ pub fn get_eligible_players_with_shares(env: &Env) -> Vec<(Address, u32, u32, u3
     // Second pass: calculate share percentages based on total effective power
     let mut result = Vec::new(env);
     for (player, level, total_power, effective_power, card_details, bonus) in player_data.iter() {
-        let share_percentage = if total_effective_power > 0 {
-            (effective_power * 10000) / total_effective_power // Basis points
-        } else {
-            0
-        };
-        result.push_back((player, level, total_power, share_percentage, card_details, bonus));
+        let share_percentage = calculate_share_percentage(effective_power, total_effective_power);
+        result.push_back((
+            player,
+            level,
+            total_power,
+            share_percentage,
+            card_details,
+            bonus,
+        ));
     }
     result
 }
@@ -752,11 +764,7 @@ pub fn calculate_player_shares(env: &Env, round: u32) {
     }
 
     for (player, effective_power, deck_bonus, deck_categories) in player_powers.iter() {
-        let share_percentage = if total_effective_power > 0 {
-            (effective_power * 10000) / total_effective_power // Basis points
-        } else {
-            0
-        };
+        let share_percentage = calculate_share_percentage(effective_power, total_effective_power);
 
         let reward = PlayerReward {
             share_percentage,

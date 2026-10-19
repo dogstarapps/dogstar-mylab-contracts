@@ -807,6 +807,17 @@ impl NFT {
         let admin = read_administrator(&e);
         admin.require_auth();
         bump_instance(&e);
+
+        let key = DataKey::User(address.clone());
+        if e.storage().persistent().has(&key) {
+            e.storage().persistent().extend_ttl(
+                &key,
+                STORAGE_THRESHOLD_LEDGERS,
+                STORAGE_BUMP_LEDGERS,
+            );
+            return;
+        }
+
         let user: User = User {
             owner: address.clone(),
             power: 100,
@@ -815,6 +826,53 @@ impl NFT {
             level: 1,
         };
         write_user(&e, address, user);
+    }
+
+    pub fn restore_user(
+        e: Env,
+        address: Address,
+        expected_power: u32,
+        expected_terry: i128,
+        expected_total_history_terry: i128,
+        power: u32,
+        terry: i128,
+        total_history_terry: i128,
+    ) {
+        let admin = read_administrator(&e);
+        admin.require_auth();
+        bump_instance(&e);
+
+        assert!(terry >= 0, "negative Terry balance not allowed");
+        assert!(
+            total_history_terry >= 0,
+            "negative Terry history not allowed"
+        );
+        assert!(
+            e.storage()
+                .persistent()
+                .has(&DataKey::User(address.clone())),
+            "user does not exist"
+        );
+
+        let current = read_user(&e, address.clone());
+        assert!(current.power == expected_power, "user power changed");
+        assert!(current.terry == expected_terry, "user Terry balance changed");
+        assert!(
+            current.total_history_terry == expected_total_history_terry,
+            "user Terry history changed"
+        );
+
+        write_user(
+            &e,
+            address.clone(),
+            User {
+                owner: address,
+                power,
+                terry,
+                total_history_terry,
+                level: 1,
+            },
+        );
     }
 
     pub fn get_all_cards(e: &Env) -> soroban_sdk::Vec<CardMetadata> {
@@ -1341,11 +1399,7 @@ impl NFT {
                 continue;
             }
             let effective_power = calculate_effective_power(deck.total_power, deck.bonus);
-            let share_percentage = if total_effective > 0 {
-                (effective_power * 10000) / total_effective
-            } else {
-                0
-            };
+            let share_percentage = calculate_share_percentage(effective_power, total_effective);
 
             let reward = PlayerReward {
                 share_percentage,
