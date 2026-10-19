@@ -302,6 +302,7 @@ fn test_add_power() {
     config.xtar_token = xtar_token.clone();
 
     let nft = create_nft(e.clone(), &contract_id, &admin, &config);
+    nft.create_user(&player);
 
     // Mint terry tokens to player
     nft.mint_terry(&player, &100000);
@@ -309,8 +310,6 @@ fn test_add_power() {
 
     let metadata = create_metadata(&e);
     nft.create_metadata(&metadata, &1);
-    // create player
-    nft.create_user(&player);
 
     // mint
     // Ensure player has terry before minting with Terry currency
